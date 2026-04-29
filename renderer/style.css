@@ -449,14 +449,25 @@ body.sidebar-collapsed .sidebar {
 }
 
 /* ── Channel list ──────────────────────────────────────────────────────────── */
-.channel-list,
 .profiles-list {
-    display: flex;
-    flex-direction: column; /* 🔥 IMPORTANT */
+    position: relative;
+    overflow-y: auto;
+    height: 100%;
+    flex-direction: column;
     align-items: stretch;
     gap: 6px;
     padding: 8px;
+}
+
+.channel-list {
+    position: relative;
     overflow-y: auto;
+    height: 100%;
+    padding: 8px;
+}
+
+#virtual-list {
+    position: relative;
 }
 
 .empty {
@@ -742,7 +753,7 @@ body.sidebar-collapsed .sidebar {
     opacity: 0;
     transform: translateY(8px);
     transition: opacity 0.3s, transform 0.3s;
-    pointer-events: none;
+    pointer-events: auto;
 }
 
 .video-controls.hidden {
