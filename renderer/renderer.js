@@ -744,11 +744,9 @@ function filterAndRender() {
     renderChannels();
 }
 
-function renderChannels() {
-    const isScrollUpdate = arguments[0] === 'scroll';
-    if (!isScrollUpdate) {
-        channelList.scrollTop = 0;
-    }
+function renderChannels(mode) {
+    const isScrollUpdate = mode === 'scroll';
+
     const list = state.filtered;
     let container = $('virtual-list');
 
@@ -778,7 +776,21 @@ function renderChannels() {
         Math.ceil((scrollTop + containerHeight) / ITEM_HEIGHT) + BUFFER
     );
 
+    // 🔥 optimisation (à placer AVANT render)
+    if (
+        isScrollUpdate &&
+        state.lastRenderRange &&
+        state.lastRenderRange.start === startIndex &&
+        state.lastRenderRange.end === endIndex
+    ) {
+        return;
+    }
+
+    state.lastRenderRange = { start: startIndex, end: endIndex };
+
     const visibleItems = list.slice(startIndex, endIndex);
+
+    container.innerHTML = '';
 
     const topSpacer = document.createElement('div');
     topSpacer.style.height = `${startIndex * ITEM_HEIGHT}px`;
@@ -817,7 +829,6 @@ function renderChannels() {
         frag.appendChild(div);
     });
 
-    container.innerHTML = '';
     container.appendChild(topSpacer);
     container.appendChild(frag);
     container.appendChild(bottomSpacer);
@@ -935,6 +946,7 @@ async function playChannel(channel) {
 
     nowName.textContent = channel.name;
     nowGroup.textContent = channel.group;
+    showEPGOverlay(channel);
     liveDot.classList.remove('visible');
 
     // ── Masquer vidéo + afficher chargement ──
@@ -1447,8 +1459,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 });
 
+let scrollTimeout;
+
 channelList.addEventListener('scroll', () => {
-    renderChannels('scroll');
+    if (scrollTimeout) return;
+
+    scrollTimeout = setTimeout(() => {
+        renderChannels('scroll');
+        scrollTimeout = null;
+    }, 16);
 });
 
 (async () => {
@@ -1620,14 +1639,24 @@ video.addEventListener('dblclick', toggleFullscreen);
 
 //📺 21. EPG VISUEL (GROS + UX)
 
-function getEPGProgress(epg) {
-    if (!epg?.start || !epg?.end) return 0;
+function showEPGOverlay(channel) {
+    const overlay = $('epg-overlay');
+    const title = $('epg-title');
+    const now = $('epg-now');
 
-    const now = Date.now();
-    const start = new Date(epg.start).getTime();
-    const end = new Date(epg.end).getTime();
+    title.textContent = channel.name;
 
-    return Math.min(100, Math.max(0, ((now - start) / (end - start)) * 100));
+    const epg = state.epg[channel.id]
+        || state.epg[channel.name]
+        || state.epg[channel.number];
+
+    if (epg) {
+        now.textContent = `${epg.now || ''} ${epg.next ? '→ ' + epg.next : ''}`;
+    } else {
+        now.textContent = channel.group;
+    }
+
+    overlay.classList.remove('hidden');
 }
 
 // 🖼️ 22. MODE PICTURE-IN-PICTURE

@@ -1615,55 +1615,42 @@ body.tv-mode .video-controls {
     box-shadow: 0 12px 30px var(--accent-glow);
 }
 
-/* ── EPG style ───────────────────────────────────────────── */
-
-.ch-group {
+.epg-overlay {
     display: flex;
-    flex-direction: column;
-    gap: 2px;
-    font-size: 11px;
-    line-height: 1.3;
+    position: absolute;
+    top: 45px;
+    gap: 15px;
+    left: 50%;
+    transform: translateX(-50%);
+    opacity: 1;
+    transition: opacity 0.2s ease, transform 0.2s ease;
 }
 
-/* Programme actuel */
-.ch-group::first-line {
-    color: var(--text);
+.epg-title {
+    font-size: 16px;
     font-weight: 600;
-}
-
-/* Ligne suivante */
-.ch-group span {
-    color: var(--text2);
-}
-
-/* Amélioration visuelle */
-.ch-item:hover .ch-group {
-    color: var(--text);
-}
-
-/* Glow chaîne active */
-.ch-item.playing .ch-group {
     color: white;
 }
 
-/* Petite séparation visuelle */
-.ch-group {
-    opacity: 0.85;
+.epg-now {
+    font-size: 13px;
+    color: rgba(255,255,255,0.75);
+    margin-top: 2px;
 }
 
-/* ── EPG Progress Bar (future upgrade ready) ─────────────── */
-
-.epg-progress {
-    width: 100%;
-    height: 3px;
-    border-radius: 999px;
-    background: rgba(255,255,255,0.1);
-    overflow: hidden;
-    margin-top: 4px;
+.epg-overlay.hidden {
+    opacity: 0;
+    transform: translate(-50%, -10px);
+    pointer-events: none;
 }
 
-.epg-progress-bar {
-    height: 100%;
-    background: linear-gradient(90deg, var(--accent), var(--accent2));
-    width: 40%; /* dynamique plus tard */
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translate(-50%, -10px);
+    }
+    to {
+        opacity: 1;
+        transform: translate(-50%, 0);
+    }
 }
