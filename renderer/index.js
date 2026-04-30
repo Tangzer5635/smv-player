@@ -1,3 +1,4 @@
+/*INIT*/
 // ── État global ───────────────────────────────────────────────────────────────
 const state = {
     channels: [],
@@ -57,6 +58,22 @@ const btnSettings = document.getElementById("btn-settings");
 const settingsModal = document.getElementById("settings-modal");
 const closeSettingsBtn = document.getElementById("close-settings");
 
+const btnSidebarToggle = document.getElementById("btn-sidebar-toggle");
+const sidebarBackdrop = document.getElementById("sidebar-backdrop");
+
+(async () => {
+    state.config = await window.electronAPI.getConfig();
+    $('cfg-ua').value = state.config.userAgent || '';
+    $('cfg-timeout').value = state.config.networkTimeout || 60;
+    $('cfg-referrer').value = state.config.referrer || '';
+    $('cfg-headers').value = state.config.headerFields || '';
+    $('cfg-vlc').value = state.config.vlcPath || '';
+    siUa.textContent = state.config.userAgent || '';
+    await refreshProfilesList();
+})();
+
+/*Settings*/
+
 function openSettings() {
     settingsModal?.classList.remove("hidden");
     document.body.classList.add("settings-open");
@@ -78,6 +95,48 @@ function toggleSettings() {
     }
 }
 
+$('save-settings').onclick = async () => {
+    const color = accentInput.value;
+    localStorage.setItem("accentColor", color);
+    const cfg = {
+        userAgent: $('cfg-ua').value.trim(),
+        networkTimeout: parseInt($('cfg-timeout').value) || 60,
+        referrer: $('cfg-referrer').value.trim(),
+        headerFields: $('cfg-headers').value.trim(),
+        vlcPath: $('cfg-vlc').value.trim(),
+    };
+    state.config = await window.electronAPI.updateConfig(cfg);
+    siUa.textContent = cfg.userAgent;
+    closeSettings();
+    toast('✅ Paramètres sauvegardés');
+};
+
+$('btn-browse-vlc').onclick = async () => {
+    const res = await window.electronAPI.browseVlcPath();
+    if (!res?.success) return;
+    $('cfg-vlc').value = res.path;
+    const cfg = {
+        userAgent: $('cfg-ua').value.trim(),
+        networkTimeout: parseInt($('cfg-timeout').value) || 60,
+        referrer: $('cfg-referrer').value.trim(),
+        headerFields: $('cfg-headers').value.trim(),
+        vlcPath: res.path,
+    };
+    state.config = await window.electronAPI.updateConfig(cfg);
+    toast('✅ Chemin VLC sauvegardé');
+};
+
+document.querySelectorAll('.tab').forEach((btn) => {
+    btn.onclick = () => {
+        document.querySelectorAll('.tab').forEach((b) => b.classList.remove('active'));
+        document.querySelectorAll('.tab-pane').forEach((p) => p.classList.add('hidden'));
+        btn.classList.add('active');
+        $(`tab-${btn.dataset.tab}`).classList.remove('hidden');
+    };
+});
+
+/*AddEventListener*/
+
 btnSettings?.addEventListener("click", toggleSettings);
 closeSettingsBtn?.addEventListener("click", closeSettings);
 
@@ -91,9 +150,34 @@ btnEnterApp?.addEventListener("click", () => {
     welcomeScreen?.classList.add("hidden");
 });
 
-function getSavedProfiles() {
-    return JSON.parse(localStorage.getItem('smv_profiles') || '[]');
-}
+document.addEventListener("DOMContentLoaded", async () => {
+    renderWelcomeProfiles();
+
+    const lastProfileId = localStorage.getItem("lastProfileId");
+
+    if (lastProfileId) {
+        try {
+            await loadProfile(lastProfileId);
+            welcomeScreen?.classList.add("hidden");
+        } catch (e) {
+            console.log("Auto load profil failed");
+        }
+    }
+});
+
+$('portal-mac').addEventListener('input', function () {
+    let v = this.value.toUpperCase().replace(/[^0-9A-F]/g, '');
+    v = v.match(/.{1,2}/g)?.join(':') || v;
+    this.value = v.slice(0, 17);
+});
+
+$('btn-toggle-cats').onclick = () => {
+    state.categoriesCollapsed = !state.categoriesCollapsed;
+    groupBar.classList.toggle('collapsed', state.categoriesCollapsed);
+    $('btn-toggle-cats').textContent = state.categoriesCollapsed ? '▶' : '▼';
+};
+
+/*Welcome*/
 
 function renderWelcomeProfiles() {
     if (!welcomeProfilesGrid || !welcomeProfilesCount) return;
@@ -148,20 +232,7 @@ function renderWelcomeProfiles() {
     });
 }
 
-document.addEventListener("DOMContentLoaded", async () => {
-    renderWelcomeProfiles();
-
-    const lastProfileId = localStorage.getItem("lastProfileId");
-
-    if (lastProfileId) {
-        try {
-            await loadProfile(lastProfileId);
-            welcomeScreen?.classList.add("hidden");
-        } catch (e) {
-            console.log("Auto load profil failed");
-        }
-    }
-});
+/*EPG*/
 
 async function loadEPG() {
     if (!state.stalkerSession) return;
@@ -180,6 +251,23 @@ async function loadEPG() {
         console.error("EPG error", e);
     }
 }
+
+function getEPGText(channel) {
+    if (!state.epg) return channel.group;
+
+    const epg = state.epg[channel.id]
+        || state.epg[channel.name]
+        || state.epg[channel.number];
+
+    if (!epg) return channel.group;
+
+    const now = epg.now ? `▶ ${epg.now}` : '';
+    const next = epg.next ? `→ ${epg.next}` : '';
+
+    return `${now} ${next}`.trim() || channel.group;
+}
+
+/*UTILS*/
 
 function hexToRgb(hex) {
     const clean = hex.replace("#", "");
@@ -232,7 +320,6 @@ document.getElementById("save-settings")?.addEventListener("click", () => {
     localStorage.setItem("accentColor", color);
 });
 
-// Changement en direct
 accentInput.addEventListener("input", (e) => {
     const color = e.target.value;
     document.documentElement.style.setProperty("--accent", color);
@@ -253,6 +340,13 @@ function toast(msg, dur = 3000) {
     t._timer = setTimeout(() => t.classList.remove('show'), dur);
 }
 
+function toIntOrNull(value) {
+    const num = Number.parseInt(value, 10);
+    return Number.isFinite(num) ? num : null;
+}
+
+/*GETTER*/
+
 function getChannelKey(channel) {
     const id = String(channel?.id ?? '');
     const type = String(channel?.contentType || 'live');
@@ -261,12 +355,6 @@ function getChannelKey(channel) {
 
 function getChannelLegacyKey(channel) {
     return String(channel?.id ?? '');
-}
-
-function isFavorite(channel) {
-    const key = getChannelKey(channel);
-    const legacyKey = getChannelLegacyKey(channel);
-    return state.favoriteChannelIds.includes(key) || state.favoriteChannelIds.includes(legacyKey);
 }
 
 function buildLibraryItems(live = [], vod = [], series = []) {
@@ -294,11 +382,6 @@ function buildLibraryItems(live = [], vod = [], series = []) {
     }));
 
     return [...liveItems, ...vodItems, ...seriesItems];
-}
-
-function toIntOrNull(value) {
-    const num = Number.parseInt(value, 10);
-    return Number.isFinite(num) ? num : null;
 }
 
 function getEpisodeLabel(item, fallbackIndex = 0) {
@@ -330,35 +413,16 @@ function getProfileDisplayCount(items) {
     return `${items.length} elements`;
 }
 
-async function reloadProfileLibrary(profile) {
-    if (profile.type !== 'stalker' || !profile.portalUrl || !profile.mac) return null;
+/*FAVORITE*/
 
-    const res = await window.electronAPI.stalkerConnect({
-        portalUrl: profile.portalUrl,
-        mac: profile.mac,
-    });
+function getSavedProfiles() {
+    return JSON.parse(localStorage.getItem('smv_profiles') || '[]');
+}
 
-    if (!res.success) {
-        throw new Error(res.error || 'Recharge du profil impossible');
-    }
-
-    const session = {
-        token: res.token,
-        serverBase: res.serverBase,
-        mac: res.mac,
-        stalkerHeaders: res.stalkerHeaders,
-    };
-
-    const libraryItems = buildLibraryItems(res.channels, res.vod, res.series);
-
-    await window.electronAPI.profileUpdate({
-        id: profile.id,
-        channels: libraryItems,
-        stalkerSession: session,
-        favoriteChannelIds: state.favoriteChannelIds,
-    });
-
-    return {session, items: libraryItems};
+function isFavorite(channel) {
+    const key = getChannelKey(channel);
+    const legacyKey = getChannelLegacyKey(channel);
+    return state.favoriteChannelIds.includes(key) || state.favoriteChannelIds.includes(legacyKey);
 }
 
 function updateFavoritesChip() {
@@ -366,20 +430,6 @@ function updateFavoritesChip() {
     if (countNode) {
         countNode.textContent = String(state.channels.filter((channel) => isFavorite(channel)).length);
     }
-}
-
-function openRenameProfileModal(profileId, currentName) {
-    state.renameProfileId = profileId;
-    $('rename-profile-input').value = currentName || '';
-    renameProfileModal.classList.remove('hidden');
-    $('rename-profile-input').focus();
-    $('rename-profile-input').select();
-}
-
-function closeRenameProfileModal() {
-    state.renameProfileId = null;
-    $('rename-profile-input').value = '';
-    renameProfileModal.classList.add('hidden');
 }
 
 async function persistFavorites() {
@@ -414,141 +464,80 @@ async function toggleFavorite(channel) {
     if (!saved) toast('❌ Impossible de sauvegarder les favoris');
 }
 
-// ── Init ──────────────────────────────────────────────────────────────────────
-(async () => {
-    state.config = await window.electronAPI.getConfig();
-    $('cfg-ua').value = state.config.userAgent || '';
-    $('cfg-timeout').value = state.config.networkTimeout || 60;
-    $('cfg-referrer').value = state.config.referrer || '';
-    $('cfg-headers').value = state.config.headerFields || '';
-    $('cfg-vlc').value = state.config.vlcPath || '';
-    siUa.textContent = state.config.userAgent || '';
+/*Profiles*/
+
+$('confirm-rename-profile').onclick = async () => {
+    const name = $('rename-profile-input').value.trim();
+    if (!state.renameProfileId) return;
+    if (!name) return toast('⚠️ Nom requis');
+
+    await window.electronAPI.profileRename({id: state.renameProfileId, name});
+    closeRenameProfileModal();
     await refreshProfilesList();
-})();
-
-// ── Window controls ───────────────────────────────────────────────────────────
-$('btn-minimize').onclick = () => window.electronAPI.windowMinimize();
-$('btn-maximize').onclick = () => window.electronAPI.windowMaximize();
-$('btn-close').onclick = () => window.electronAPI.windowClose();
-
-function updateMaximizeButton(isMaximized) {
-    const btn = $('btn-maximize');
-    btn.textContent = isMaximized ? '❐' : '☐';
-    btn.title = isMaximized ? 'Restaurer' : 'Agrandir';
-}
-
-window.electronAPI.onWindowStateChanged(({isMaximized}) => {
-    updateMaximizeButton(Boolean(isMaximized));
-});
-
-$('btn-minimize').onclick = () => window.electronAPI.windowMinimize();
-$('btn-maximize').onclick = () => window.electronAPI.windowMaximize();
-$('btn-close').onclick = () => window.electronAPI.windowClose();
-
-const titlebar = document.querySelector('.titlebar');
-if (titlebar) {
-    titlebar.addEventListener('dblclick', (event) => {
-        if (event.target.closest('.titlebar-right')) return;
-        window.electronAPI.windowMaximize();
-    });
-}
-
-// ── Settings ──────────────────────────────────────────────────────────────────
-$('save-settings').onclick = async () => {
-    const color = accentInput.value;
-    localStorage.setItem("accentColor", color);
-    const cfg = {
-        userAgent: $('cfg-ua').value.trim(),
-        networkTimeout: parseInt($('cfg-timeout').value) || 60,
-        referrer: $('cfg-referrer').value.trim(),
-        headerFields: $('cfg-headers').value.trim(),
-        vlcPath: $('cfg-vlc').value.trim(),
-    };
-    state.config = await window.electronAPI.updateConfig(cfg);
-    siUa.textContent = cfg.userAgent;
-    closeSettings();
-    toast('✅ Paramètres sauvegardés');
+    toast(`✏️ Profil renommé en "${name}"`);
 };
 
-$('btn-browse-vlc').onclick = async () => {
-    const res = await window.electronAPI.browseVlcPath();
-    if (!res?.success) return;
-    $('cfg-vlc').value = res.path;
-    const cfg = {
-        userAgent: $('cfg-ua').value.trim(),
-        networkTimeout: parseInt($('cfg-timeout').value) || 60,
-        referrer: $('cfg-referrer').value.trim(),
-        headerFields: $('cfg-headers').value.trim(),
-        vlcPath: res.path,
-    };
-    state.config = await window.electronAPI.updateConfig(cfg);
-    toast('✅ Chemin VLC sauvegardé');
-};
-
-// ── Tabs source ───────────────────────────────────────────────────────────────
-document.querySelectorAll('.tab').forEach((btn) => {
-    btn.onclick = () => {
-        document.querySelectorAll('.tab').forEach((b) => b.classList.remove('active'));
-        document.querySelectorAll('.tab-pane').forEach((p) => p.classList.add('hidden'));
-        btn.classList.add('active');
-        $(`tab-${btn.dataset.tab}`).classList.remove('hidden');
-    };
-});
-
-// ── MAC auto-format ───────────────────────────────────────────────────────────
-$('portal-mac').addEventListener('input', function () {
-    let v = this.value.toUpperCase().replace(/[^0-9A-F]/g, '');
-    v = v.match(/.{1,2}/g)?.join(':') || v;
-    this.value = v.slice(0, 17);
-});
-
-// ── Catégories toggle ─────────────────────────────────────────────────────────
-$('btn-toggle-cats').onclick = () => {
-    state.categoriesCollapsed = !state.categoriesCollapsed;
-    groupBar.classList.toggle('collapsed', state.categoriesCollapsed);
-    $('btn-toggle-cats').textContent = state.categoriesCollapsed ? '▶' : '▼';
-};
-
-function setMode(mode) {
-    state.currentMode = mode;
-    modeLiveBtn.classList.toggle('active', mode === 'live');
-    modeVodBtn.classList.toggle('active', mode === 'vod');
-    modeSeriesBtn.classList.toggle('active', mode === 'series');
-    seriesBackBtn.classList.toggle('hidden', mode !== 'series-episodes');
-    filterAndRender();
-}
-
-modeLiveBtn.onclick = () => {
-    state.seriesEpisodes = [];
-    state.seriesStack = [];
-    setMode('live');
-};
-
-modeVodBtn.onclick = () => {
-    state.seriesEpisodes = [];
-    state.seriesStack = [];
-    setMode('vod');
-};
-
-modeSeriesBtn.onclick = () => {
-    state.seriesEpisodes = [];
-    state.seriesStack = [];
-    setMode('series');
-};
-
-seriesBackBtn.onclick = () => {
-    const prev = state.seriesStack.pop();
-    if (prev) {
-        state.seriesEpisodes = prev;
-    } else {
-        state.seriesEpisodes = [];
+$('rename-profile-input').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+        event.preventDefault();
+        $('confirm-rename-profile').click();
     }
-    setMode('series');
-};
+});
 
-// ══════════════════════════════════════════════════════════════════════════════
-//  PROFILS
-// ══════════════════════════════════════════════════════════════════════════════
+async function reloadProfileLibrary(profile) {
+    if (profile.type !== 'stalker' || !profile.portalUrl || !profile.mac) return null;
+
+    const res = await window.electronAPI.stalkerConnect({
+        portalUrl: profile.portalUrl,
+        mac: profile.mac,
+    });
+
+    if (!res.success) {
+        throw new Error(res.error || 'Recharge du profil impossible');
+    }
+
+    const session = {
+        token: res.token,
+        serverBase: res.serverBase,
+        mac: res.mac,
+        stalkerHeaders: res.stalkerHeaders,
+    };
+
+    const libraryItems = buildLibraryItems(res.channels, res.vod, res.series);
+
+    await window.electronAPI.profileUpdate({
+        id: profile.id,
+        channels: libraryItems,
+        stalkerSession: session,
+        favoriteChannelIds: state.favoriteChannelIds,
+    });
+
+    return {session, items: libraryItems};
+}
+
+function openRenameProfileModal(profileId, currentName) {
+    state.renameProfileId = profileId;
+    $('rename-profile-input').value = currentName || '';
+    renameProfileModal.classList.remove('hidden');
+    $('rename-profile-input').focus();
+    $('rename-profile-input').select();
+}
+
+function openEditProfileModal(profile) {
+    state.renameProfileId = profile.id;
+
+    $('edit-name').value = profile.name || '';
+    $('edit-url').value = profile.portalUrl || '';
+    $('edit-mac').value = profile.mac || '';
+
+    $('edit-profile-modal').classList.remove('hidden');
+}
+
+function closeRenameProfileModal() {
+    state.renameProfileId = null;
+    $('rename-profile-input').value = '';
+    renameProfileModal.classList.add('hidden');
+}
 
 async function refreshProfilesList() {
     const profiles = await window.electronAPI.profilesList();
@@ -752,9 +741,174 @@ async function refreshProfile(profileId, type) {
     await refreshProfilesList();
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-//  CONNEXION STALKER
-// ══════════════════════════════════════════════════════════════════════════════
+$('btn-save-profile').onclick = () => {
+    state.saveContext = 'stalker';
+    $('profile-name-input').value = '';
+    $('save-profile-modal').classList.remove('hidden');
+    $('profile-name-input').focus();
+};
+$('close-save-profile').onclick = () => $('save-profile-modal').classList.add('hidden');
+$('close-rename-profile').onclick = () => closeRenameProfileModal();
+$('confirm-save-profile').onclick = async () => {
+    const name = $('profile-name-input').value.trim();
+    if (!name) return toast('⚠️ Nom requis');
+
+    const data = {
+        name,
+        channels: state.channels,
+        favoriteChannelIds: state.favoriteChannelIds,
+    };
+
+    if (state.saveContext === 'stalker') {
+        data.type = 'stalker';
+        data.portalUrl = $('portal-url').value.trim();
+        data.mac = $('portal-mac').value.trim();
+        data.stalkerSession = state.stalkerSession;
+    } else {
+        data.type = 'stalker';
+        data.portalUrl = '';
+        data.mac = '';
+    }
+
+    const result = await window.electronAPI.profileSave(data);
+    state.currentProfileId = result.id;
+    $('save-profile-modal').classList.add('hidden');
+    await refreshProfilesList();
+    toast(`💾 Profil "${name}" sauvegardé (${state.channels.length} chaînes)`);
+};
+$('confirm-edit-profile').onclick = async () => {
+    const id = state.renameProfileId;
+
+    const name = $('edit-name').value.trim();
+    const portalUrl = $('edit-url').value.trim();
+    const mac = $('edit-mac').value.trim();
+
+    if (!name) return toast("Nom requis");
+
+    await window.electronAPI.profileUpdate({
+        id,
+        name,
+        portalUrl,
+        mac
+    });
+
+    $('edit-profile-modal').classList.add('hidden');
+
+    await refreshProfilesList();
+
+    toast("✅ Profil modifié");
+};
+
+/*Windows Controls*/
+
+$('btn-minimize').onclick = () => window.electronAPI.windowMinimize();
+$('btn-maximize').onclick = () => window.electronAPI.windowMaximize();
+$('btn-close').onclick = () => window.electronAPI.windowClose();
+
+function updateMaximizeButton(isMaximized) {
+    const btn = $('btn-maximize');
+    btn.textContent = isMaximized ? '❐' : '☐';
+    btn.title = isMaximized ? 'Restaurer' : 'Agrandir';
+}
+
+window.electronAPI.onWindowStateChanged(({isMaximized}) => {
+    updateMaximizeButton(Boolean(isMaximized));
+});
+
+const titlebar = document.querySelector('.titlebar');
+if (titlebar) {
+    titlebar.addEventListener('dblclick', (event) => {
+        if (event.target.closest('.titlebar-right')) return;
+        window.electronAPI.windowMaximize();
+    });
+}
+
+
+/*Categorie Choix*/
+
+function setMode(mode) {
+    state.currentMode = mode;
+    modeLiveBtn.classList.toggle('active', mode === 'live');
+    modeVodBtn.classList.toggle('active', mode === 'vod');
+    modeSeriesBtn.classList.toggle('active', mode === 'series');
+    seriesBackBtn.classList.toggle('hidden', mode !== 'series-episodes');
+    filterAndRender();
+}
+
+modeLiveBtn.onclick = () => {
+    state.seriesEpisodes = [];
+    state.seriesStack = [];
+    setMode('live');
+};
+
+modeVodBtn.onclick = () => {
+    state.seriesEpisodes = [];
+    state.seriesStack = [];
+    setMode('vod');
+};
+
+modeSeriesBtn.onclick = () => {
+    state.seriesEpisodes = [];
+    state.seriesStack = [];
+    setMode('series');
+};
+
+seriesBackBtn.onclick = () => {
+    const prev = state.seriesStack.pop();
+    if (prev) {
+        state.seriesEpisodes = prev;
+    } else {
+        state.seriesEpisodes = [];
+    }
+    setMode('series');
+};
+
+async function openSeries(seriesItem) {
+    if (!state.stalkerSession) {
+        toast('âš ï¸ Connexion Stalker requise');
+        return;
+    }
+
+    try {
+        const res = await window.electronAPI.stalkerSeriesEpisodes({
+            serverBase: state.stalkerSession.serverBase,
+            mac: state.stalkerSession.mac,
+            token: state.stalkerSession.token,
+            seriesId: seriesItem.seriesId || seriesItem.id,
+            stalkerHeadersJson: state.stalkerSession.stalkerHeaders,
+        });
+
+        if (!res.success) {
+            toast(`âŒ ${res.error || 'Impossible de charger la sÃ©rie'}`);
+            return;
+        }
+
+        const episodes = (res.items || []).map((item, index) => ({
+            id: item.id || `${seriesItem.id}-${index}`,
+            name: getEpisodeLabel(item, index),
+            number: '',
+            cmd: item.cmd || seriesItem.cmd || '',
+            logo: item.screenshot_uri || item.logo || seriesItem.logo || '',
+            group: seriesItem.name || 'SÃ©ries',
+            contentType: 'series',
+            isSeries: false,
+            metaLabel: getEpisodeMeta(item, seriesItem),
+            seriesIndex: toIntOrNull(item.series_number ?? item.series ?? item.episode_number ?? item.number) ?? index + 1,
+            seasonNumber: toIntOrNull(item.season_num ?? item.season_number ?? item.season ?? item.season_id),
+            episodeNumber: toIntOrNull(item.episode_num ?? item.episode_number ?? item.series_number ?? item.series ?? item.number) ?? index + 1,
+            episodeId: item.episode_id || item.id || null,
+            containerExtension: item.container_extension || item.extension || 'mkv',
+        }));
+
+        state.seriesStack.push(state.seriesEpisodes);
+        state.seriesEpisodes = episodes;
+        setMode('series-episodes');
+    } catch (err) {
+        toast(`âŒ ${err.message}`);
+    }
+}
+
+/*Stalker*/
 
 $('btn-connect').onclick = async () => {
     const portalUrl = $('portal-url').value.trim();
@@ -800,71 +954,6 @@ $('btn-connect').onclick = async () => {
         btn.textContent = '🔗 Connexion';
     }
 };
-
-// ── Sauver profil ─────────────────────────────────────────────────────────────
-$('btn-save-profile').onclick = () => {
-    state.saveContext = 'stalker';
-    $('profile-name-input').value = '';
-    $('save-profile-modal').classList.remove('hidden');
-    $('profile-name-input').focus();
-};
-
-$('close-save-profile').onclick = () => $('save-profile-modal').classList.add('hidden');
-$('close-rename-profile').onclick = () => closeRenameProfileModal();
-
-$('confirm-save-profile').onclick = async () => {
-    const name = $('profile-name-input').value.trim();
-    if (!name) return toast('⚠️ Nom requis');
-
-    const data = {
-        name,
-        channels: state.channels,
-        favoriteChannelIds: state.favoriteChannelIds,
-    };
-
-    if (state.saveContext === 'stalker') {
-        data.type = 'stalker';
-        data.portalUrl = $('portal-url').value.trim();
-        data.mac = $('portal-mac').value.trim();
-        data.stalkerSession = state.stalkerSession;
-    } else {
-        data.type = 'stalker';
-        data.portalUrl = '';
-        data.mac = '';
-    }
-
-    const result = await window.electronAPI.profileSave(data);
-    state.currentProfileId = result.id;
-    $('save-profile-modal').classList.add('hidden');
-    await refreshProfilesList();
-    toast(`💾 Profil "${name}" sauvegardé (${state.channels.length} chaînes)`);
-};
-
-$('confirm-edit-profile').onclick = async () => {
-    const id = state.renameProfileId;
-
-    const name = $('edit-name').value.trim();
-    const portalUrl = $('edit-url').value.trim();
-    const mac = $('edit-mac').value.trim();
-
-    if (!name) return toast("Nom requis");
-
-    await window.electronAPI.profileUpdate({
-        id,
-        name,
-        portalUrl,
-        mac
-    });
-
-    $('edit-profile-modal').classList.add('hidden');
-
-    await refreshProfilesList();
-
-    toast("✅ Profil modifié");
-};
-// ══════════════════════════════════════════════════════════════════════════════
-//  CHANNELS
-// ══════════════════════════════════════════════════════════════════════════════
 
 function loadChannels(channels) {
     state.channels = channels;
@@ -943,7 +1032,8 @@ function selectGroup(group) {
     filterAndRender();
 }
 
-// ── Recherche ─────────────────────────────────────────────────────────────────
+/*Recherche*/
+
 searchInp.addEventListener('input', () => {
     $('btn-clear-search').classList.toggle('visible', searchInp.value.length > 0);
     filterAndRender();
@@ -1048,79 +1138,16 @@ function renderChannels() {
     channelList.appendChild(frag);
 }
 
-function getEPGText(channel) {
-    if (!state.epg) return channel.group;
-
-    const epg = state.epg[channel.id]
-        || state.epg[channel.name]
-        || state.epg[channel.number];
-
-    if (!epg) return channel.group;
-
-    const now = epg.now ? `▶ ${epg.now}` : '';
-    const next = epg.next ? `→ ${epg.next}` : '';
-
-    return `${now} ${next}`.trim() || channel.group;
+function navigateChannel(direction) {
+    if (!state.filtered.length) return;
+    const currentIdx = state.filtered.findIndex((c) => getChannelKey(c) === getChannelKey(state.currentChannel));
+    let nextIdx = currentIdx + direction;
+    if (nextIdx < 0) nextIdx = state.filtered.length - 1;
+    if (nextIdx >= state.filtered.length) nextIdx = 0;
+    playChannel(state.filtered[nextIdx]);
 }
 
-function openEditProfileModal(profile) {
-    state.renameProfileId = profile.id;
-
-    $('edit-name').value = profile.name || '';
-    $('edit-url').value = profile.portalUrl || '';
-    $('edit-mac').value = profile.mac || '';
-
-    $('edit-profile-modal').classList.remove('hidden');
-}
-
-async function openSeries(seriesItem) {
-    if (!state.stalkerSession) {
-        toast('âš ï¸ Connexion Stalker requise');
-        return;
-    }
-
-    try {
-        const res = await window.electronAPI.stalkerSeriesEpisodes({
-            serverBase: state.stalkerSession.serverBase,
-            mac: state.stalkerSession.mac,
-            token: state.stalkerSession.token,
-            seriesId: seriesItem.seriesId || seriesItem.id,
-            stalkerHeadersJson: state.stalkerSession.stalkerHeaders,
-        });
-
-        if (!res.success) {
-            toast(`âŒ ${res.error || 'Impossible de charger la sÃ©rie'}`);
-            return;
-        }
-
-        const episodes = (res.items || []).map((item, index) => ({
-            id: item.id || `${seriesItem.id}-${index}`,
-            name: getEpisodeLabel(item, index),
-            number: '',
-            cmd: item.cmd || seriesItem.cmd || '',
-            logo: item.screenshot_uri || item.logo || seriesItem.logo || '',
-            group: seriesItem.name || 'SÃ©ries',
-            contentType: 'series',
-            isSeries: false,
-            metaLabel: getEpisodeMeta(item, seriesItem),
-            seriesIndex: toIntOrNull(item.series_number ?? item.series ?? item.episode_number ?? item.number) ?? index + 1,
-            seasonNumber: toIntOrNull(item.season_num ?? item.season_number ?? item.season ?? item.season_id),
-            episodeNumber: toIntOrNull(item.episode_num ?? item.episode_number ?? item.series_number ?? item.series ?? item.number) ?? index + 1,
-            episodeId: item.episode_id || item.id || null,
-            containerExtension: item.container_extension || item.extension || 'mkv',
-        }));
-
-        state.seriesStack.push(state.seriesEpisodes);
-        state.seriesEpisodes = episodes;
-        setMode('series-episodes');
-    } catch (err) {
-        toast(`âŒ ${err.message}`);
-    }
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-//  LECTURE — avec buffering masqué
-// ══════════════════════════════════════════════════════════════════════════════
+/*Lecteur*/
 
 async function playChannel(channel) {
     destroyPlayer();
@@ -1332,9 +1359,7 @@ function destroyPlayer() {
     video.load();
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-//  CONTRÔLES VIDÉO
-// ══════════════════════════════════════════════════════════════════════════════
+/*Controle Vidéo*/
 
 video.volume = 0.8;
 $('vc-volume').value = 80;
@@ -1420,16 +1445,6 @@ $('vc-pip').onclick = async () => {
 
 $('vc-fs').onclick = toggleFullscreen;
 
-function toggleFullscreen() {
-    const wrap = $('video-wrap');
-    if (!document.fullscreenElement) {
-        wrap.requestFullscreen().catch(() => toast('❌ Plein écran non disponible'));
-    } else {
-        document.exitFullscreen();
-    }
-}
-
-// ── Afficher/masquer contrôles au survol ──────────────────────────────────────
 let controlsTimer;
 
 $('video-wrap').addEventListener('mousemove', () => {
@@ -1437,7 +1452,6 @@ $('video-wrap').addEventListener('mousemove', () => {
     clearTimeout(controlsTimer);
     controlsTimer = setTimeout(() => videoControls.classList.remove('visible'), 3000);
 });
-
 $('video-wrap').addEventListener('mouseleave', () => {
     clearTimeout(controlsTimer);
     controlsTimer = setTimeout(() => videoControls.classList.remove('visible'), 1000);
@@ -1447,35 +1461,25 @@ videoControls.addEventListener('mouseenter', () => {
     clearTimeout(controlsTimer);
     videoControls.classList.add('visible');
 });
-
 videoControls.addEventListener('mouseleave', () => {
     controlsTimer = setTimeout(() => videoControls.classList.remove('visible'), 2000);
 });
 
-// ══════════════════════════════════════════════════════════════════════════════
-//  EVENTS VIDÉO — buffering fluide
-// ══════════════════════════════════════════════════════════════════════════════
-
 let bufferCheckTimer = null;
 
-// Quand suffisamment bufferisé → révéler la vidéo
 video.addEventListener('canplaythrough', () => {
     console.log('✅ canplaythrough — révélation vidéo');
     revealVideo();
 });
-
-// Fallback : si canplaythrough tarde, on révèle après 2s de canplay
 video.addEventListener('canplay', () => {
     clearTimeout(bufferCheckTimer);
     bufferCheckTimer = setTimeout(() => {
         revealVideo();
     }, 1500);
 });
-
 video.addEventListener('playing', () => {
     // Ne rien faire ici — c'est startPlayer qui gère l'affichage après buffer
 });
-
 video.addEventListener('timeupdate', refreshSeekBar);
 video.addEventListener('loadedmetadata', refreshSeekBar);
 video.addEventListener('durationchange', refreshSeekBar);
@@ -1484,6 +1488,64 @@ video.addEventListener('ended', () => {
     seekBar.value = '1000';
     refreshSeekBar();
 });
+video.addEventListener('waiting', () => {
+    // Seulement montrer le loading si la vidéo était déjà visible
+    if (video.style.opacity === '1') {
+        loadingOverlay.classList.remove('hidden');
+    }
+});
+video.addEventListener('stalled', () => {
+    if (video.style.opacity === '1') {
+        loadingOverlay.classList.remove('hidden');
+    }
+});
+video.addEventListener('canplay', () => {
+    // Masquer le loading si la vidéo est déjà visible (reprise après rebuffering)
+    if (video.style.opacity === '1') {
+        hideLoading();
+    }
+});
+video.addEventListener('error', () => {
+    if (!state.player) {
+        const errMsg = getVideoError(video.error);
+        video.style.opacity = '1';
+        showError(errMsg);
+        liveDot.classList.remove('visible');
+    }
+});
+video.addEventListener('dblclick', () => toggleFullscreen());
+
+$('btn-retry').onclick = () => {
+    if (state.currentChannel) {
+        state.retryCount = 0;
+        playChannel(state.currentChannel);
+    }
+};
+
+function getVideoError(err) {
+    if (!err) return 'Erreur inconnue';
+    switch (err.code) {
+        case 1:
+            return 'Lecture interrompue';
+        case 2:
+            return 'Erreur réseau — flux inaccessible';
+        case 3:
+            return 'Erreur de décodage — format non supporté';
+        case 4:
+            return 'Format non supporté';
+        default:
+            return err.message || 'Erreur inconnue';
+    }
+}
+
+function toggleFullscreen() {
+    const wrap = $('video-wrap');
+    if (!document.fullscreenElement) {
+        wrap.requestFullscreen().catch(() => toast('❌ Plein écran non disponible'));
+    } else {
+        document.exitFullscreen();
+    }
+}
 
 function revealVideo() {
     clearTimeout(bufferCheckTimer);
@@ -1522,60 +1584,6 @@ function refreshSeekBar() {
     }
 }
 
-video.addEventListener('waiting', () => {
-    // Seulement montrer le loading si la vidéo était déjà visible
-    if (video.style.opacity === '1') {
-        loadingOverlay.classList.remove('hidden');
-    }
-});
-
-video.addEventListener('stalled', () => {
-    if (video.style.opacity === '1') {
-        loadingOverlay.classList.remove('hidden');
-    }
-});
-
-video.addEventListener('canplay', () => {
-    // Masquer le loading si la vidéo est déjà visible (reprise après rebuffering)
-    if (video.style.opacity === '1') {
-        hideLoading();
-    }
-});
-
-video.addEventListener('error', () => {
-    if (!state.player) {
-        const errMsg = getVideoError(video.error);
-        video.style.opacity = '1';
-        showError(errMsg);
-        liveDot.classList.remove('visible');
-    }
-});
-
-function getVideoError(err) {
-    if (!err) return 'Erreur inconnue';
-    switch (err.code) {
-        case 1:
-            return 'Lecture interrompue';
-        case 2:
-            return 'Erreur réseau — flux inaccessible';
-        case 3:
-            return 'Erreur de décodage — format non supporté';
-        case 4:
-            return 'Format non supporté';
-        default:
-            return err.message || 'Erreur inconnue';
-    }
-}
-
-// ── Retry overlay ─────────────────────────────────────────────────────────────
-$('btn-retry').onclick = () => {
-    if (state.currentChannel) {
-        state.retryCount = 0;
-        playChannel(state.currentChannel);
-    }
-};
-
-// ── Helpers UI ────────────────────────────────────────────────────────────────
 function showLoading() {
     loadingOverlay.classList.remove('hidden');
     errorOverlay.classList.add('hidden');
@@ -1593,7 +1601,8 @@ function showError(msg) {
     errorOverlay.classList.remove('hidden');
 }
 
-// ── Raccourcis clavier ────────────────────────────────────────────────────────
+/*Raccourcis clavier*/
+
 document.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT') return;
     if (e.key === "/") {
@@ -1645,39 +1654,12 @@ document.addEventListener('keydown', (e) => {
     }
 });
 
-function navigateChannel(direction) {
-    if (!state.filtered.length) return;
-    const currentIdx = state.filtered.findIndex((c) => getChannelKey(c) === getChannelKey(state.currentChannel));
-    let nextIdx = currentIdx + direction;
-    if (nextIdx < 0) nextIdx = state.filtered.length - 1;
-    if (nextIdx >= state.filtered.length) nextIdx = 0;
-    playChannel(state.filtered[nextIdx]);
-}
-
-video.addEventListener('dblclick', () => toggleFullscreen());
-
-$('confirm-rename-profile').onclick = async () => {
-    const name = $('rename-profile-input').value.trim();
-    if (!state.renameProfileId) return;
-    if (!name) return toast('⚠️ Nom requis');
-
-    await window.electronAPI.profileRename({id: state.renameProfileId, name});
-    closeRenameProfileModal();
-    await refreshProfilesList();
-    toast(`✏️ Profil renommé en "${name}"`);
-};
-
-$('rename-profile-input').addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') {
-        event.preventDefault();
-        $('confirm-rename-profile').click();
-    }
-});
-
-const btnSidebarToggle = document.getElementById("btn-sidebar-toggle");
-const sidebarBackdrop = document.getElementById("sidebar-backdrop");
-
 document.body.classList.remove("sidebar-collapsed");
+
+/*Sidebar*/
+
+btnSidebarToggle?.addEventListener("click", toggleSidebar);
+sidebarBackdrop?.addEventListener("click", closeSidebar);
 
 function openSidebar() {
     document.body.classList.remove("sidebar-collapsed");
@@ -1697,9 +1679,6 @@ function toggleSidebar() {
         closeSidebar();
     }
 }
-
-btnSidebarToggle?.addEventListener("click", toggleSidebar);
-sidebarBackdrop?.addEventListener("click", closeSidebar);
 
 function toggleTvMode() {
     document.body.classList.toggle("tv-mode");

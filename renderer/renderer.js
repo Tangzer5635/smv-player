@@ -1,5 +1,4 @@
-//1. ⚙️ STATE + DOM + CONFIG
-
+// ── État global ───────────────────────────────────────────────────────────────
 const state = {
     channels: [],
     filtered: [],
@@ -57,18 +56,6 @@ const welcomeScreen = document.getElementById("welcome-screen");
 const btnSettings = document.getElementById("btn-settings");
 const settingsModal = document.getElementById("settings-modal");
 const closeSettingsBtn = document.getElementById("close-settings");
-const btnSidebarToggle = document.getElementById("btn-sidebar-toggle");
-const sidebarBackdrop = document.getElementById("sidebar-backdrop");
-
-const savedColor = localStorage.getItem("accentColor");
-if (savedColor) {
-    applyAccentColor(savedColor);
-    if (accentInput) accentInput.value = savedColor;
-}
-
-//2. 🎨 UI GÉNÉRALE / MODALS
-
-/*SETTINGS*/
 
 function openSettings() {
     settingsModal?.classList.remove("hidden");
@@ -91,237 +78,18 @@ function toggleSettings() {
     }
 }
 
-/*Rename*/
+btnSettings?.addEventListener("click", toggleSettings);
+closeSettingsBtn?.addEventListener("click", closeSettings);
 
-function openRenameProfileModal(profileId, currentName) {
-    state.renameProfileId = profileId;
-    $('rename-profile-input').value = currentName || '';
-    renameProfileModal.classList.remove('hidden');
-    $('rename-profile-input').focus();
-    $('rename-profile-input').select();
-}
-
-function closeRenameProfileModal() {
-    state.renameProfileId = null;
-    $('rename-profile-input').value = '';
-    renameProfileModal.classList.add('hidden');
-}
-
-/*Edit*/
-
-function openEditProfileModal(profile) {
-    state.renameProfileId = profile.id;
-
-    $('edit-name').value = profile.name || '';
-    $('edit-url').value = profile.portalUrl || '';
-    $('edit-mac').value = profile.mac || '';
-
-    $('edit-profile-modal').classList.remove('hidden');
-}
-
-/*Sidebar*/
-
-function openSidebar() {
-    document.body.classList.remove("sidebar-collapsed");
-    sidebarBackdrop.classList.remove("hidden");
-}
-
-function closeSidebar() {
-    document.body.classList.add("sidebar-collapsed");
-    sidebarBackdrop.classList.add("hidden");
-}
-
-function toggleSidebar() {
-    const isCollapsed = document.body.classList.contains("sidebar-collapsed");
-    if (isCollapsed) {
-        openSidebar();
-    } else {
-        closeSidebar();
+settingsModal?.addEventListener("click", (e) => {
+    if (e.target === settingsModal) {
+        closeSettings();
     }
-}
+});
 
-/*TvMode*/
-
-function toggleTvMode() {
-    document.body.classList.toggle("tv-mode");
-}
-
-//3. 🧰 UTILS
-
-function escHtml(s) {
-    const d = document.createElement('div');
-    d.textContent = s;
-    return d.innerHTML;
-}
-
-function toast(msg, dur = 3000) {
-    const t = $('toast');
-    t.textContent = msg;
-    t.classList.add('show');
-    clearTimeout(t._timer);
-    t._timer = setTimeout(() => t.classList.remove('show'), dur);
-}
-
-function hexToRgb(hex) {
-    const clean = hex.replace("#", "");
-    const bigint = parseInt(clean, 16);
-    const r = (bigint >> 16) & 255;
-    const g = (bigint >> 8) & 255;
-    const b = bigint & 255;
-    return `${r}, ${g}, ${b}`;
-}
-
-function lightenColor(hex, percent) {
-    const num = parseInt(hex.replace("#", ""), 16);
-    const amt = Math.round(2.55 * percent);
-    const R = (num >> 16) + amt;
-    const G = ((num >> 8) & 0x00ff) + amt;
-    const B = (num & 0x0000ff) + amt;
-
-    return (
-        "#" +
-        (
-            0x1000000 +
-            (R < 255 ? (R < 1 ? 0 : R) : 255) * 0x10000 +
-            (G < 255 ? (G < 1 ? 0 : G) : 255) * 0x100 +
-            (B < 255 ? (B < 1 ? 0 : B) : 255)
-        )
-            .toString(16)
-            .slice(1)
-    );
-}
-
-function applyAccentColor(color) {
-    document.documentElement.style.setProperty("--accent", color);
-    document.documentElement.style.setProperty("--accent2", lightenColor(color, 30));
-    document.documentElement.style.setProperty("--accent-rgb", hexToRgb(color));
-}
-
-function formatTime(totalSeconds) {
-    if (!Number.isFinite(totalSeconds) || totalSeconds < 0) return '00:00';
-    const hours = Math.floor(totalSeconds / 3600);
-    const minutes = Math.floor((totalSeconds % 3600) / 60);
-    const seconds = Math.floor(totalSeconds % 60);
-    if (hours > 0) {
-        return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-    }
-    return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-}
-
-function toIntOrNull(value) {
-    const num = Number.parseInt(value, 10);
-    return Number.isFinite(num) ? num : null;
-}
-
-function getChannelKey(channel) {
-    const id = String(channel?.id ?? '');
-    const type = String(channel?.contentType || 'live');
-    return `${type}:${id}`;
-}
-
-function getChannelLegacyKey(channel) {
-    return String(channel?.id ?? '');
-}
-
-//4. 📡 API / DATA
-
-async function loadEPG() {
-    if (!state.stalkerSession) return;
-
-    try {
-        const res = await window.electronAPI.stalkerGetEPG({
-            serverBase: state.stalkerSession.serverBase,
-            mac: state.stalkerSession.mac,
-            token: state.stalkerSession.token,
-        });
-
-        if (!res.success) return;
-
-        state.epg = res.epg || {};
-    } catch (e) {
-        console.error("EPG error", e);
-    }
-}
-
-async function reloadProfileLibrary(profile) {
-    if (profile.type !== 'stalker' || !profile.portalUrl || !profile.mac) return null;
-
-    const res = await window.electronAPI.stalkerConnect({
-        portalUrl: profile.portalUrl,
-        mac: profile.mac,
-    });
-
-    if (!res.success) {
-        throw new Error(res.error || 'Recharge du profil impossible');
-    }
-
-    const session = {
-        token: res.token,
-        serverBase: res.serverBase,
-        mac: res.mac,
-        stalkerHeaders: res.stalkerHeaders,
-    };
-
-    const libraryItems = buildLibraryItems(res.channels, res.vod, res.series);
-
-    await window.electronAPI.profileUpdate({
-        id: profile.id,
-        channels: libraryItems,
-        stalkerSession: session,
-        favoriteChannelIds: state.favoriteChannelIds,
-    });
-
-    return {session, items: libraryItems};
-}
-
-async function persistFavorites() {
-    if (!state.currentProfileId) return false;
-    const result = await window.electronAPI.profileUpdate({
-        id: state.currentProfileId,
-        favoriteChannelIds: state.favoriteChannelIds,
-    });
-    return result?.success === true;
-}
-
-//5. ❤️ FAVORIS
-
-function isFavorite(channel) {
-    const key = getChannelKey(channel);
-    const legacyKey = getChannelLegacyKey(channel);
-    return state.favoriteChannelIds.includes(key) || state.favoriteChannelIds.includes(legacyKey);
-}
-
-async function toggleFavorite(channel) {
-    const channelId = getChannelKey(channel);
-    const legacyChannelId = getChannelLegacyKey(channel);
-    if (!channelId) return;
-
-    if (isFavorite(channel)) {
-        state.favoriteChannelIds = state.favoriteChannelIds.filter((id) => id !== channelId && id !== legacyChannelId);
-    } else {
-        state.favoriteChannelIds = [...state.favoriteChannelIds, channelId];
-    }
-
-    updateFavoritesChip();
-    filterAndRender();
-
-    if (!state.currentProfileId) {
-        toast('⭐ Favori local. Sauvegardez le profil pour le conserver.');
-        return;
-    }
-
-    const saved = await persistFavorites();
-    if (!saved) toast('❌ Impossible de sauvegarder les favoris');
-}
-
-function updateFavoritesChip() {
-    const countNode = document.querySelector('.g-chip[data-group="favorites"] .g-count');
-    if (countNode) {
-        countNode.textContent = String(state.channels.filter((channel) => isFavorite(channel)).length);
-    }
-}
-
-//6. 👤 PROFILS
+btnEnterApp?.addEventListener("click", () => {
+    welcomeScreen?.classList.add("hidden");
+});
 
 function getSavedProfiles() {
     return JSON.parse(localStorage.getItem('smv_profiles') || '[]');
@@ -395,20 +163,392 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 });
 
-function renderProfiles() {
-    const list = document.getElementById("profiles-list");
-    if (!list) return;
+async function loadEPG() {
+    if (!state.stalkerSession) return;
 
-    const profiles = getSavedProfiles();
+    try {
+        const res = await window.electronAPI.stalkerGetEPG({
+            serverBase: state.stalkerSession.serverBase,
+            mac: state.stalkerSession.mac,
+            token: state.stalkerSession.token,
+        });
 
-    list.innerHTML = profiles.map(p => `
-        <div class="profile-item ${p.id === state.currentProfileId ? 'playing' : ''}"
-             onclick="loadProfile('${p.id}')">
-            <div class="profile-name">${p.name || 'Profil'}</div>
-            <div class="profile-meta">${p.portalUrl || p.portal}</div>
-        </div>
-    `).join('');
+        if (!res.success) return;
+
+        state.epg = res.epg || {};
+    } catch (e) {
+        console.error("EPG error", e);
+    }
 }
+
+function hexToRgb(hex) {
+    const clean = hex.replace("#", "");
+    const bigint = parseInt(clean, 16);
+    const r = (bigint >> 16) & 255;
+    const g = (bigint >> 8) & 255;
+    const b = bigint & 255;
+    return `${r}, ${g}, ${b}`;
+}
+
+function lightenColor(hex, percent) {
+    const num = parseInt(hex.replace("#", ""), 16);
+    const amt = Math.round(2.55 * percent);
+    const R = (num >> 16) + amt;
+    const G = ((num >> 8) & 0x00ff) + amt;
+    const B = (num & 0x0000ff) + amt;
+
+    return (
+        "#" +
+        (
+            0x1000000 +
+            (R < 255 ? (R < 1 ? 0 : R) : 255) * 0x10000 +
+            (G < 255 ? (G < 1 ? 0 : G) : 255) * 0x100 +
+            (B < 255 ? (B < 1 ? 0 : B) : 255)
+        )
+            .toString(16)
+            .slice(1)
+    );
+}
+
+function applyAccentColor(color) {
+    document.documentElement.style.setProperty("--accent", color);
+    document.documentElement.style.setProperty("--accent2", lightenColor(color, 30));
+    document.documentElement.style.setProperty("--accent-rgb", hexToRgb(color));
+}
+
+const savedColor = localStorage.getItem("accentColor");
+if (savedColor) {
+    applyAccentColor(savedColor);
+    if (accentInput) accentInput.value = savedColor;
+}
+
+accentInput?.addEventListener("input", (e) => {
+    applyAccentColor(e.target.value);
+});
+
+document.getElementById("save-settings")?.addEventListener("click", () => {
+    const color = accentInput?.value || "#6c5ce7";
+    applyAccentColor(color);
+    localStorage.setItem("accentColor", color);
+});
+
+// Changement en direct
+accentInput.addEventListener("input", (e) => {
+    const color = e.target.value;
+    document.documentElement.style.setProperty("--accent", color);
+    document.documentElement.style.setProperty("--accent2", lightenColor(color, 30));
+});
+
+function escHtml(s) {
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+}
+
+function toast(msg, dur = 3000) {
+    const t = $('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    clearTimeout(t._timer);
+    t._timer = setTimeout(() => t.classList.remove('show'), dur);
+}
+
+function getChannelKey(channel) {
+    const id = String(channel?.id ?? '');
+    const type = String(channel?.contentType || 'live');
+    return `${type}:${id}`;
+}
+
+function getChannelLegacyKey(channel) {
+    return String(channel?.id ?? '');
+}
+
+function isFavorite(channel) {
+    const key = getChannelKey(channel);
+    const legacyKey = getChannelLegacyKey(channel);
+    return state.favoriteChannelIds.includes(key) || state.favoriteChannelIds.includes(legacyKey);
+}
+
+function buildLibraryItems(live = [], vod = [], series = []) {
+    const liveItems = live.map((item, index) => ({
+        ...item,
+        contentType: 'live',
+        number: item.number || index + 1,
+        group: item.group || 'Live',
+    }));
+
+    const vodItems = vod.map((item) => ({
+        ...item,
+        contentType: 'vod',
+        number: '',
+        group: `VOD • ${item.category || 'Films'}`,
+    }));
+
+    const seriesItems = series.map((item) => ({
+        ...item,
+        contentType: 'series',
+        number: '',
+        group: `SERIES • ${item.category || 'Series'}`,
+        isSeries: item.isSeries ?? true,
+        seriesId: item.seriesId || item.id,
+    }));
+
+    return [...liveItems, ...vodItems, ...seriesItems];
+}
+
+function toIntOrNull(value) {
+    const num = Number.parseInt(value, 10);
+    return Number.isFinite(num) ? num : null;
+}
+
+function getEpisodeLabel(item, fallbackIndex = 0) {
+    const season = toIntOrNull(item.season_num ?? item.season_number ?? item.season ?? item.season_id);
+    const episode = toIntOrNull(
+        item.episode_num ?? item.episode_number ?? item.series_number ?? item.series ?? item.number ?? item.sort_num
+    ) ?? fallbackIndex + 1;
+    const title = item.name || item.title || item.episode_name || `Episode ${episode}`;
+
+    if (season) {
+        return `S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')} - ${title}`;
+    }
+    return `E${String(episode).padStart(2, '0')} - ${title}`;
+}
+
+function getEpisodeMeta(item, seriesItem) {
+    const season = toIntOrNull(item.season_num ?? item.season_number ?? item.season ?? item.season_id);
+    const episode = toIntOrNull(
+        item.episode_num ?? item.episode_number ?? item.series_number ?? item.series ?? item.number ?? item.sort_num
+    );
+    const parts = [];
+    if (season) parts.push(`Saison ${season}`);
+    if (episode) parts.push(`Episode ${episode}`);
+    parts.push(seriesItem.name || 'Series');
+    return parts.join(' • ');
+}
+
+function getProfileDisplayCount(items) {
+    return `${items.length} elements`;
+}
+
+async function reloadProfileLibrary(profile) {
+    if (profile.type !== 'stalker' || !profile.portalUrl || !profile.mac) return null;
+
+    const res = await window.electronAPI.stalkerConnect({
+        portalUrl: profile.portalUrl,
+        mac: profile.mac,
+    });
+
+    if (!res.success) {
+        throw new Error(res.error || 'Recharge du profil impossible');
+    }
+
+    const session = {
+        token: res.token,
+        serverBase: res.serverBase,
+        mac: res.mac,
+        stalkerHeaders: res.stalkerHeaders,
+    };
+
+    const libraryItems = buildLibraryItems(res.channels, res.vod, res.series);
+
+    await window.electronAPI.profileUpdate({
+        id: profile.id,
+        channels: libraryItems,
+        stalkerSession: session,
+        favoriteChannelIds: state.favoriteChannelIds,
+    });
+
+    return {session, items: libraryItems};
+}
+
+function updateFavoritesChip() {
+    const countNode = document.querySelector('.g-chip[data-group="favorites"] .g-count');
+    if (countNode) {
+        countNode.textContent = String(state.channels.filter((channel) => isFavorite(channel)).length);
+    }
+}
+
+function openRenameProfileModal(profileId, currentName) {
+    state.renameProfileId = profileId;
+    $('rename-profile-input').value = currentName || '';
+    renameProfileModal.classList.remove('hidden');
+    $('rename-profile-input').focus();
+    $('rename-profile-input').select();
+}
+
+function closeRenameProfileModal() {
+    state.renameProfileId = null;
+    $('rename-profile-input').value = '';
+    renameProfileModal.classList.add('hidden');
+}
+
+async function persistFavorites() {
+    if (!state.currentProfileId) return false;
+    const result = await window.electronAPI.profileUpdate({
+        id: state.currentProfileId,
+        favoriteChannelIds: state.favoriteChannelIds,
+    });
+    return result?.success === true;
+}
+
+async function toggleFavorite(channel) {
+    const channelId = getChannelKey(channel);
+    const legacyChannelId = getChannelLegacyKey(channel);
+    if (!channelId) return;
+
+    if (isFavorite(channel)) {
+        state.favoriteChannelIds = state.favoriteChannelIds.filter((id) => id !== channelId && id !== legacyChannelId);
+    } else {
+        state.favoriteChannelIds = [...state.favoriteChannelIds, channelId];
+    }
+
+    updateFavoritesChip();
+    filterAndRender();
+
+    if (!state.currentProfileId) {
+        toast('⭐ Favori local. Sauvegardez le profil pour le conserver.');
+        return;
+    }
+
+    const saved = await persistFavorites();
+    if (!saved) toast('❌ Impossible de sauvegarder les favoris');
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+(async () => {
+    state.config = await window.electronAPI.getConfig();
+    $('cfg-ua').value = state.config.userAgent || '';
+    $('cfg-timeout').value = state.config.networkTimeout || 60;
+    $('cfg-referrer').value = state.config.referrer || '';
+    $('cfg-headers').value = state.config.headerFields || '';
+    $('cfg-vlc').value = state.config.vlcPath || '';
+    siUa.textContent = state.config.userAgent || '';
+    await refreshProfilesList();
+})();
+
+// ── Window controls ───────────────────────────────────────────────────────────
+$('btn-minimize').onclick = () => window.electronAPI.windowMinimize();
+$('btn-maximize').onclick = () => window.electronAPI.windowMaximize();
+$('btn-close').onclick = () => window.electronAPI.windowClose();
+
+function updateMaximizeButton(isMaximized) {
+    const btn = $('btn-maximize');
+    btn.textContent = isMaximized ? '❐' : '☐';
+    btn.title = isMaximized ? 'Restaurer' : 'Agrandir';
+}
+
+window.electronAPI.onWindowStateChanged(({isMaximized}) => {
+    updateMaximizeButton(Boolean(isMaximized));
+});
+
+$('btn-minimize').onclick = () => window.electronAPI.windowMinimize();
+$('btn-maximize').onclick = () => window.electronAPI.windowMaximize();
+$('btn-close').onclick = () => window.electronAPI.windowClose();
+
+const titlebar = document.querySelector('.titlebar');
+if (titlebar) {
+    titlebar.addEventListener('dblclick', (event) => {
+        if (event.target.closest('.titlebar-right')) return;
+        window.electronAPI.windowMaximize();
+    });
+}
+
+// ── Settings ──────────────────────────────────────────────────────────────────
+$('save-settings').onclick = async () => {
+    const color = accentInput.value;
+    localStorage.setItem("accentColor", color);
+    const cfg = {
+        userAgent: $('cfg-ua').value.trim(),
+        networkTimeout: parseInt($('cfg-timeout').value) || 60,
+        referrer: $('cfg-referrer').value.trim(),
+        headerFields: $('cfg-headers').value.trim(),
+        vlcPath: $('cfg-vlc').value.trim(),
+    };
+    state.config = await window.electronAPI.updateConfig(cfg);
+    siUa.textContent = cfg.userAgent;
+    closeSettings();
+    toast('✅ Paramètres sauvegardés');
+};
+
+$('btn-browse-vlc').onclick = async () => {
+    const res = await window.electronAPI.browseVlcPath();
+    if (!res?.success) return;
+    $('cfg-vlc').value = res.path;
+    const cfg = {
+        userAgent: $('cfg-ua').value.trim(),
+        networkTimeout: parseInt($('cfg-timeout').value) || 60,
+        referrer: $('cfg-referrer').value.trim(),
+        headerFields: $('cfg-headers').value.trim(),
+        vlcPath: res.path,
+    };
+    state.config = await window.electronAPI.updateConfig(cfg);
+    toast('✅ Chemin VLC sauvegardé');
+};
+
+// ── Tabs source ───────────────────────────────────────────────────────────────
+document.querySelectorAll('.tab').forEach((btn) => {
+    btn.onclick = () => {
+        document.querySelectorAll('.tab').forEach((b) => b.classList.remove('active'));
+        document.querySelectorAll('.tab-pane').forEach((p) => p.classList.add('hidden'));
+        btn.classList.add('active');
+        $(`tab-${btn.dataset.tab}`).classList.remove('hidden');
+    };
+});
+
+// ── MAC auto-format ───────────────────────────────────────────────────────────
+$('portal-mac').addEventListener('input', function () {
+    let v = this.value.toUpperCase().replace(/[^0-9A-F]/g, '');
+    v = v.match(/.{1,2}/g)?.join(':') || v;
+    this.value = v.slice(0, 17);
+});
+
+// ── Catégories toggle ─────────────────────────────────────────────────────────
+$('btn-toggle-cats').onclick = () => {
+    state.categoriesCollapsed = !state.categoriesCollapsed;
+    groupBar.classList.toggle('collapsed', state.categoriesCollapsed);
+    $('btn-toggle-cats').textContent = state.categoriesCollapsed ? '▶' : '▼';
+};
+
+function setMode(mode) {
+    state.currentMode = mode;
+    modeLiveBtn.classList.toggle('active', mode === 'live');
+    modeVodBtn.classList.toggle('active', mode === 'vod');
+    modeSeriesBtn.classList.toggle('active', mode === 'series');
+    seriesBackBtn.classList.toggle('hidden', mode !== 'series-episodes');
+    filterAndRender();
+}
+
+modeLiveBtn.onclick = () => {
+    state.seriesEpisodes = [];
+    state.seriesStack = [];
+    setMode('live');
+};
+
+modeVodBtn.onclick = () => {
+    state.seriesEpisodes = [];
+    state.seriesStack = [];
+    setMode('vod');
+};
+
+modeSeriesBtn.onclick = () => {
+    state.seriesEpisodes = [];
+    state.seriesStack = [];
+    setMode('series');
+};
+
+seriesBackBtn.onclick = () => {
+    const prev = state.seriesStack.pop();
+    if (prev) {
+        state.seriesEpisodes = prev;
+    } else {
+        state.seriesEpisodes = [];
+    }
+    setMode('series');
+};
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  PROFILS
+// ══════════════════════════════════════════════════════════════════════════════
 
 async function refreshProfilesList() {
     const profiles = await window.electronAPI.profilesList();
@@ -568,6 +708,21 @@ async function loadProfile(profileId) {
     await refreshProfilesList();
 }
 
+function renderProfiles() {
+    const list = document.getElementById("profiles-list");
+    if (!list) return;
+
+    const profiles = getSavedProfiles();
+
+    list.innerHTML = profiles.map(p => `
+        <div class="profile-item ${p.id === state.currentProfileId ? 'playing' : ''}"
+             onclick="loadProfile('${p.id}')">
+            <div class="profile-name">${p.name || 'Profil'}</div>
+            <div class="profile-meta">${p.portalUrl || p.portal}</div>
+        </div>
+    `).join('');
+}
+
 async function refreshProfile(profileId, type) {
     const result = await window.electronAPI.profileLoad(profileId);
     if (!result.success) return toast('❌ Profil introuvable');
@@ -597,42 +752,119 @@ async function refreshProfile(profileId, type) {
     await refreshProfilesList();
 }
 
-function openRenameProfileModal(profileId, currentName) {
-    state.renameProfileId = profileId;
-    $('rename-profile-input').value = currentName || '';
-    renameProfileModal.classList.remove('hidden');
-    $('rename-profile-input').focus();
-    $('rename-profile-input').select();
-}
+// ══════════════════════════════════════════════════════════════════════════════
+//  CONNEXION STALKER
+// ══════════════════════════════════════════════════════════════════════════════
 
-//7. 📺 CHANNELS / LIBRARY
+$('btn-connect').onclick = async () => {
+    const portalUrl = $('portal-url').value.trim();
+    const mac = $('portal-mac').value.trim();
 
-function buildLibraryItems(live = [], vod = [], series = []) {
-    const liveItems = live.map((item, index) => ({
-        ...item,
-        contentType: 'live',
-        number: item.number || index + 1,
-        group: item.group || 'Live',
-    }));
+    if (!portalUrl || !mac) return toast('⚠️ URL et MAC requis');
+    if (!/^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/.test(mac)) return toast('⚠️ Format MAC invalide');
 
-    const vodItems = vod.map((item) => ({
-        ...item,
-        contentType: 'vod',
-        number: '',
-        group: `VOD • ${item.category || 'Films'}`,
-    }));
+    const btn = $('btn-connect');
+    btn.disabled = true;
+    btn.textContent = '⏳ Connexion...';
 
-    const seriesItems = series.map((item) => ({
-        ...item,
-        contentType: 'series',
-        number: '',
-        group: `SERIES • ${item.category || 'Series'}`,
-        isSeries: item.isSeries ?? true,
-        seriesId: item.seriesId || item.id,
-    }));
+    try {
+        const res = await window.electronAPI.stalkerConnect({portalUrl, mac});
 
-    return [...liveItems, ...vodItems, ...seriesItems];
-}
+        if (!res.success) {
+            toast(`❌ ${res.error}`);
+            return;
+        }
+
+        state.stalkerSession = {
+            token: res.token,
+            serverBase: res.serverBase,
+            mac: res.mac,
+            stalkerHeaders: res.stalkerHeaders,
+        };
+        state.currentProfileId = null;
+        state.favoriteChannelIds = [];
+
+        const libraryItems = buildLibraryItems(res.channels, res.vod, res.series);
+        loadChannels(libraryItems);
+
+        connInfo.classList.remove('hidden');
+        connLabel.textContent = '✅ Connecté';
+        connCount.textContent = libraryItems.length;
+        $('btn-save-profile').classList.remove('hidden');
+        state.saveContext = 'stalker';
+        toast(`✅ ${res.channels.length} chaînes chargées`);
+    } catch (err) {
+        toast(`❌ ${err.message}`);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '🔗 Connexion';
+    }
+};
+
+// ── Sauver profil ─────────────────────────────────────────────────────────────
+$('btn-save-profile').onclick = () => {
+    state.saveContext = 'stalker';
+    $('profile-name-input').value = '';
+    $('save-profile-modal').classList.remove('hidden');
+    $('profile-name-input').focus();
+};
+
+$('close-save-profile').onclick = () => $('save-profile-modal').classList.add('hidden');
+$('close-rename-profile').onclick = () => closeRenameProfileModal();
+
+$('confirm-save-profile').onclick = async () => {
+    const name = $('profile-name-input').value.trim();
+    if (!name) return toast('⚠️ Nom requis');
+
+    const data = {
+        name,
+        channels: state.channels,
+        favoriteChannelIds: state.favoriteChannelIds,
+    };
+
+    if (state.saveContext === 'stalker') {
+        data.type = 'stalker';
+        data.portalUrl = $('portal-url').value.trim();
+        data.mac = $('portal-mac').value.trim();
+        data.stalkerSession = state.stalkerSession;
+    } else {
+        data.type = 'stalker';
+        data.portalUrl = '';
+        data.mac = '';
+    }
+
+    const result = await window.electronAPI.profileSave(data);
+    state.currentProfileId = result.id;
+    $('save-profile-modal').classList.add('hidden');
+    await refreshProfilesList();
+    toast(`💾 Profil "${name}" sauvegardé (${state.channels.length} chaînes)`);
+};
+
+$('confirm-edit-profile').onclick = async () => {
+    const id = state.renameProfileId;
+
+    const name = $('edit-name').value.trim();
+    const portalUrl = $('edit-url').value.trim();
+    const mac = $('edit-mac').value.trim();
+
+    if (!name) return toast("Nom requis");
+
+    await window.electronAPI.profileUpdate({
+        id,
+        name,
+        portalUrl,
+        mac
+    });
+
+    $('edit-profile-modal').classList.add('hidden');
+
+    await refreshProfilesList();
+
+    toast("✅ Profil modifié");
+};
+// ══════════════════════════════════════════════════════════════════════════════
+//  CHANNELS
+// ══════════════════════════════════════════════════════════════════════════════
 
 function loadChannels(channels) {
     state.channels = channels;
@@ -711,6 +943,19 @@ function selectGroup(group) {
     filterAndRender();
 }
 
+// ── Recherche ─────────────────────────────────────────────────────────────────
+searchInp.addEventListener('input', () => {
+    $('btn-clear-search').classList.toggle('visible', searchInp.value.length > 0);
+    filterAndRender();
+});
+
+$('btn-clear-search').onclick = () => {
+    searchInp.value = '';
+    $('btn-clear-search').classList.remove('visible');
+    filterAndRender();
+    searchInp.focus();
+};
+
 function filterAndRender() {
     const query = searchInp.value.toLowerCase().trim();
     let list = state.channels;
@@ -744,79 +989,38 @@ function filterAndRender() {
     renderChannels();
 }
 
-function renderChannels(mode) {
-    const isScrollUpdate = mode === 'scroll';
-
+function renderChannels() {
     const list = state.filtered;
-    let container = $('virtual-list');
-
-    if (!container) {
-        channelList.innerHTML = '<div id="virtual-list"></div>';
-        container = $('virtual-list');
-    }
+    channelList.innerHTML = '';
 
     if (!list.length) {
         channelList.innerHTML = `
-        <div class="empty">
-            <div class="empty-icon">🔍</div>
-            <p>Aucune chaîne trouvée</p>
-        </div>`;
+      <div class="empty">
+        <div class="empty-icon">🔍</div>
+        <p>Aucune chaîne trouvée</p>
+      </div>`;
         return;
     }
-
-    const ITEM_HEIGHT = 62;
-    const BUFFER = 10;
-
-    const containerHeight = channelList.clientHeight || 600;
-    const scrollTop = channelList.scrollTop;
-
-    const startIndex = Math.max(0, Math.floor(scrollTop / ITEM_HEIGHT) - BUFFER);
-    const endIndex = Math.min(
-        list.length,
-        Math.ceil((scrollTop + containerHeight) / ITEM_HEIGHT) + BUFFER
-    );
-
-    // 🔥 optimisation (à placer AVANT render)
-    if (
-        isScrollUpdate &&
-        state.lastRenderRange &&
-        state.lastRenderRange.start === startIndex &&
-        state.lastRenderRange.end === endIndex
-    ) {
-        return;
-    }
-
-    state.lastRenderRange = { start: startIndex, end: endIndex };
-
-    const visibleItems = list.slice(startIndex, endIndex);
-
-    container.innerHTML = '';
-
-    const topSpacer = document.createElement('div');
-    topSpacer.style.height = `${startIndex * ITEM_HEIGHT}px`;
-
-    const bottomSpacer = document.createElement('div');
-    bottomSpacer.style.height = `${(list.length - endIndex) * ITEM_HEIGHT}px`;
 
     const frag = document.createDocumentFragment();
 
-    visibleItems.forEach((ch) => {
+    list.forEach((ch) => {
         const div = document.createElement('div');
         div.className = `ch-item${getChannelKey(state.currentChannel) === getChannelKey(ch) ? ' playing' : ''}`;
         if (isFavorite(ch)) div.classList.add('favorite');
 
         const logoHtml = ch.logo
-            ? `<img class="ch-logo" src="${escHtml(ch.logo)}">`
+            ? `<img class="ch-logo" src="${escHtml(ch.logo)}" alt="" onerror="this.outerHTML='<div class=\\'ch-logo-placeholder\\'>📺</div>'">`
             : '<div class="ch-logo-placeholder">📺</div>';
 
         div.innerHTML = `
-            <span class="ch-num">${ch.number || ''}</span>
-            ${logoHtml}
-            <div class="ch-info">
-                <div class="ch-name">${escHtml(ch.name)}</div>
-                <div class="ch-group">${getEPGText(ch)}</div>
-            </div>
-        `;
+      <span class="ch-num">${ch.number || ''}</span>
+      ${logoHtml}
+      <div class="ch-info">
+        <div class="ch-name">${escHtml(ch.name)}</div>
+        <div class="ch-group">${getEPGText(ch)}</div>
+      </div>
+      ${getChannelKey(state.currentChannel) === getChannelKey(ch) ? '<span class="ch-play-icon">▶</span>' : ''}`;
 
         div.onclick = () => {
             if (state.currentMode === 'series' && ch.isSeries) {
@@ -826,12 +1030,22 @@ function renderChannels(mode) {
             playChannel(ch);
         };
 
+        const favBtn = document.createElement('button');
+        favBtn.className = `ch-fav-btn${isFavorite(ch) ? ' active' : ''}`;
+        favBtn.type = 'button';
+        favBtn.title = 'Favori';
+        favBtn.setAttribute('aria-label', 'Favori');
+        favBtn.textContent = isFavorite(ch) ? '★' : '☆';
+        favBtn.onclick = async (event) => {
+            event.stopPropagation();
+            await toggleFavorite(ch);
+        };
+        div.appendChild(favBtn);
+
         frag.appendChild(div);
     });
 
-    container.appendChild(topSpacer);
-    container.appendChild(frag);
-    container.appendChild(bottomSpacer);
+    channelList.appendChild(frag);
 }
 
 function getEPGText(channel) {
@@ -849,21 +1063,15 @@ function getEPGText(channel) {
     return `${now} ${next}`.trim() || channel.group;
 }
 
-//8. 🔍 RECHERCHE
+function openEditProfileModal(profile) {
+    state.renameProfileId = profile.id;
 
-searchInp.addEventListener('input', () => {
-    $('btn-clear-search').classList.toggle('visible', searchInp.value.length > 0);
-    filterAndRender();
-});
+    $('edit-name').value = profile.name || '';
+    $('edit-url').value = profile.portalUrl || '';
+    $('edit-mac').value = profile.mac || '';
 
-$('btn-clear-search').onclick = () => {
-    searchInp.value = '';
-    $('btn-clear-search').classList.remove('visible');
-    filterAndRender();
-    searchInp.focus();
-};
-
-//9. 📁 SÉRIES / VOD
+    $('edit-profile-modal').classList.remove('hidden');
+}
 
 async function openSeries(seriesItem) {
     if (!state.stalkerSession) {
@@ -910,32 +1118,9 @@ async function openSeries(seriesItem) {
     }
 }
 
-function getEpisodeLabel(item, fallbackIndex = 0) {
-    const season = toIntOrNull(item.season_num ?? item.season_number ?? item.season ?? item.season_id);
-    const episode = toIntOrNull(
-        item.episode_num ?? item.episode_number ?? item.series_number ?? item.series ?? item.number ?? item.sort_num
-    ) ?? fallbackIndex + 1;
-    const title = item.name || item.title || item.episode_name || `Episode ${episode}`;
-
-    if (season) {
-        return `S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')} - ${title}`;
-    }
-    return `E${String(episode).padStart(2, '0')} - ${title}`;
-}
-
-function getEpisodeMeta(item, seriesItem) {
-    const season = toIntOrNull(item.season_num ?? item.season_number ?? item.season ?? item.season_id);
-    const episode = toIntOrNull(
-        item.episode_num ?? item.episode_number ?? item.series_number ?? item.series ?? item.number ?? item.sort_num
-    );
-    const parts = [];
-    if (season) parts.push(`Saison ${season}`);
-    if (episode) parts.push(`Episode ${episode}`);
-    parts.push(seriesItem.name || 'Series');
-    return parts.join(' • ');
-}
-
-//10. ▶️ PLAYER
+// ══════════════════════════════════════════════════════════════════════════════
+//  LECTURE — avec buffering masqué
+// ══════════════════════════════════════════════════════════════════════════════
 
 async function playChannel(channel) {
     destroyPlayer();
@@ -946,7 +1131,6 @@ async function playChannel(channel) {
 
     nowName.textContent = channel.name;
     nowGroup.textContent = channel.group;
-    showEPGOverlay(channel);
     liveDot.classList.remove('visible');
 
     // ── Masquer vidéo + afficher chargement ──
@@ -1148,21 +1332,26 @@ function destroyPlayer() {
     video.load();
 }
 
-//11. 🎮 CONTROLES VIDÉO
+// ══════════════════════════════════════════════════════════════════════════════
+//  CONTRÔLES VIDÉO
+// ══════════════════════════════════════════════════════════════════════════════
 
-function navigateChannel(direction) {
-    if (!state.filtered.length) return;
-    const currentIdx = state.filtered.findIndex((c) => getChannelKey(c) === getChannelKey(state.currentChannel));
-    let nextIdx = currentIdx + direction;
-    if (nextIdx < 0) nextIdx = state.filtered.length - 1;
-    if (nextIdx >= state.filtered.length) nextIdx = 0;
-    playChannel(state.filtered[nextIdx]);
-}
+video.volume = 0.8;
+$('vc-volume').value = 80;
+$('vc-vol-label').textContent = '80%';
 
 $('vc-play').onclick = () => {
     if (video.paused) video.play();
     else video.pause();
 };
+
+video.addEventListener('play', () => {
+    $('vc-play').textContent = '⏸';
+});
+video.addEventListener('pause', () => {
+    $('vc-play').textContent = '▶';
+});
+
 $('vc-stop').onclick = () => {
     destroyPlayer();
     state.currentChannel = null;
@@ -1176,6 +1365,15 @@ $('vc-stop').onclick = () => {
     nowGroup.textContent = '';
     renderChannels();
 };
+
+$('vc-prev').onclick = () => navigateChannel(-1);
+$('vc-next').onclick = () => navigateChannel(1);
+
+$('vc-mute').onclick = () => {
+    video.muted = !video.muted;
+    $('vc-mute').textContent = video.muted ? '🔇' : '🔊';
+};
+
 $('vc-volume').oninput = function () {
     const val = this.value / 100;
     video.volume = val;
@@ -1183,14 +1381,136 @@ $('vc-volume').oninput = function () {
     $('vc-mute').textContent = val === 0 ? '🔇' : val < 0.5 ? '🔉' : '🔊';
     $('vc-vol-label').textContent = `${this.value}%`;
 };
-$('vc-mute').onclick = () => {
-    video.muted = !video.muted;
-    $('vc-mute').textContent = video.muted ? '🔇' : '🔊';
-};
-$('vc-prev').onclick = () => navigateChannel(-1);
-$('vc-next').onclick = () => navigateChannel(1);
 
-//12. ⏱️ SEEK / PROGRESS
+$('vc-reload').onclick = () => {
+    if (state.currentChannel) {
+        state.retryCount = 0;
+        playChannel(state.currentChannel);
+    }
+};
+
+seekBar.addEventListener('input', () => {
+    if (!isSeekableContent()) return;
+    state.isSeekDragging = true;
+    const duration = Number.isFinite(video.duration) ? video.duration : 0;
+    if (!duration) return;
+    const targetTime = (Number(seekBar.value) / 1000) * duration;
+    currentTimeEl.textContent = formatTime(targetTime);
+});
+
+seekBar.addEventListener('change', () => {
+    const duration = Number.isFinite(video.duration) ? video.duration : 0;
+    if (isSeekableContent() && duration) {
+        video.currentTime = (Number(seekBar.value) / 1000) * duration;
+    }
+    state.isSeekDragging = false;
+});
+
+$('vc-pip').onclick = async () => {
+    try {
+        if (document.pictureInPictureElement) {
+            await document.exitPictureInPicture();
+        } else {
+            await video.requestPictureInPicture();
+        }
+    } catch (e) {
+        toast('❌ PiP non disponible');
+    }
+};
+
+$('vc-fs').onclick = toggleFullscreen;
+
+function toggleFullscreen() {
+    const wrap = $('video-wrap');
+    if (!document.fullscreenElement) {
+        wrap.requestFullscreen().catch(() => toast('❌ Plein écran non disponible'));
+    } else {
+        document.exitFullscreen();
+    }
+}
+
+// ── Afficher/masquer contrôles au survol ──────────────────────────────────────
+let controlsTimer;
+
+$('video-wrap').addEventListener('mousemove', () => {
+    videoControls.classList.add('visible');
+    clearTimeout(controlsTimer);
+    controlsTimer = setTimeout(() => videoControls.classList.remove('visible'), 3000);
+});
+
+$('video-wrap').addEventListener('mouseleave', () => {
+    clearTimeout(controlsTimer);
+    controlsTimer = setTimeout(() => videoControls.classList.remove('visible'), 1000);
+});
+
+videoControls.addEventListener('mouseenter', () => {
+    clearTimeout(controlsTimer);
+    videoControls.classList.add('visible');
+});
+
+videoControls.addEventListener('mouseleave', () => {
+    controlsTimer = setTimeout(() => videoControls.classList.remove('visible'), 2000);
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  EVENTS VIDÉO — buffering fluide
+// ══════════════════════════════════════════════════════════════════════════════
+
+let bufferCheckTimer = null;
+
+// Quand suffisamment bufferisé → révéler la vidéo
+video.addEventListener('canplaythrough', () => {
+    console.log('✅ canplaythrough — révélation vidéo');
+    revealVideo();
+});
+
+// Fallback : si canplaythrough tarde, on révèle après 2s de canplay
+video.addEventListener('canplay', () => {
+    clearTimeout(bufferCheckTimer);
+    bufferCheckTimer = setTimeout(() => {
+        revealVideo();
+    }, 1500);
+});
+
+video.addEventListener('playing', () => {
+    // Ne rien faire ici — c'est startPlayer qui gère l'affichage après buffer
+});
+
+video.addEventListener('timeupdate', refreshSeekBar);
+video.addEventListener('loadedmetadata', refreshSeekBar);
+video.addEventListener('durationchange', refreshSeekBar);
+video.addEventListener('ended', () => {
+    if (!isSeekableContent()) return;
+    seekBar.value = '1000';
+    refreshSeekBar();
+});
+
+function revealVideo() {
+    clearTimeout(bufferCheckTimer);
+    video.style.opacity = '1';
+    hideLoading();
+    placeholder.classList.add('hidden');
+    errorOverlay.classList.add('hidden');
+}
+
+function updateProgressVisibility(visible) {
+    progressWrap.classList.toggle('hidden', !visible);
+}
+
+function isSeekableContent() {
+    return state.currentChannel?.contentType === 'vod' || state.currentChannel?.contentType === 'series';
+}
+
+function formatTime(totalSeconds) {
+    if (!Number.isFinite(totalSeconds) || totalSeconds < 0) return '00:00';
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = Math.floor(totalSeconds % 60);
+    if (hours > 0) {
+        return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    }
+    return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
 
 function refreshSeekBar() {
     const duration = Number.isFinite(video.duration) ? video.duration : 0;
@@ -1202,25 +1522,23 @@ function refreshSeekBar() {
     }
 }
 
-function isSeekableContent() {
-    return state.currentChannel?.contentType === 'vod' || state.currentChannel?.contentType === 'series';
-}
-
-function updateProgressVisibility(visible) {
-    progressWrap.classList.toggle('hidden', !visible);
-}
-
-//13. ⚡ VIDEO EVENTS
-
-video.addEventListener('canplaythrough', () => {
-    console.log('✅ canplaythrough — révélation vidéo');
-    revealVideo();
-});
-
 video.addEventListener('waiting', () => {
     // Seulement montrer le loading si la vidéo était déjà visible
     if (video.style.opacity === '1') {
         loadingOverlay.classList.remove('hidden');
+    }
+});
+
+video.addEventListener('stalled', () => {
+    if (video.style.opacity === '1') {
+        loadingOverlay.classList.remove('hidden');
+    }
+});
+
+video.addEventListener('canplay', () => {
+    // Masquer le loading si la vidéo est déjà visible (reprise après rebuffering)
+    if (video.style.opacity === '1') {
+        hideLoading();
     }
 });
 
@@ -1233,164 +1551,49 @@ video.addEventListener('error', () => {
     }
 });
 
-video.addEventListener('timeupdate', refreshSeekBar);
-
-
-//14. 🖥️ WINDOW
-
-function updateMaximizeButton(isMaximized) {
-    const btn = $('btn-maximize');
-    btn.textContent = isMaximized ? '❐' : '☐';
-    btn.title = isMaximized ? 'Restaurer' : 'Agrandir';
+function getVideoError(err) {
+    if (!err) return 'Erreur inconnue';
+    switch (err.code) {
+        case 1:
+            return 'Lecture interrompue';
+        case 2:
+            return 'Erreur réseau — flux inaccessible';
+        case 3:
+            return 'Erreur de décodage — format non supporté';
+        case 4:
+            return 'Format non supporté';
+        default:
+            return err.message || 'Erreur inconnue';
+    }
 }
 
-$('btn-minimize').onclick = () => window.electronAPI.windowMinimize();
-$('btn-maximize').onclick = () => window.electronAPI.windowMaximize();
-$('btn-close').onclick = () => window.electronAPI.windowClose();
-
-//15. ⚙️ SETTINGS
-
-$('save-settings').onclick = async () => {
-    const color = accentInput.value;
-    localStorage.setItem("accentColor", color);
-    const cfg = {
-        userAgent: $('cfg-ua').value.trim(),
-        networkTimeout: parseInt($('cfg-timeout').value) || 60,
-        referrer: $('cfg-referrer').value.trim(),
-        headerFields: $('cfg-headers').value.trim(),
-        vlcPath: $('cfg-vlc').value.trim(),
-    };
-    state.config = await window.electronAPI.updateConfig(cfg);
-    siUa.textContent = cfg.userAgent;
-    closeSettings();
-    toast('✅ Paramètres sauvegardés');
-};
-
-$('btn-browse-vlc').onclick = async () => {
-    const res = await window.electronAPI.browseVlcPath();
-    if (!res?.success) return;
-    $('cfg-vlc').value = res.path;
-    const cfg = {
-        userAgent: $('cfg-ua').value.trim(),
-        networkTimeout: parseInt($('cfg-timeout').value) || 60,
-        referrer: $('cfg-referrer').value.trim(),
-        headerFields: $('cfg-headers').value.trim(),
-        vlcPath: res.path,
-    };
-    state.config = await window.electronAPI.updateConfig(cfg);
-    toast('✅ Chemin VLC sauvegardé');
-};
-
-//16. 🔌 CONNEXION STALKER
-
-$('btn-connect').onclick = async () => {
-    const portalUrl = $('portal-url').value.trim();
-    const mac = $('portal-mac').value.trim();
-
-    if (!portalUrl || !mac) return toast('⚠️ URL et MAC requis');
-    if (!/^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/.test(mac)) return toast('⚠️ Format MAC invalide');
-
-    const btn = $('btn-connect');
-    btn.disabled = true;
-    btn.textContent = '⏳ Connexion...';
-
-    try {
-        const res = await window.electronAPI.stalkerConnect({portalUrl, mac});
-
-        if (!res.success) {
-            toast(`❌ ${res.error}`);
-            return;
-        }
-
-        state.stalkerSession = {
-            token: res.token,
-            serverBase: res.serverBase,
-            mac: res.mac,
-            stalkerHeaders: res.stalkerHeaders,
-        };
-        state.currentProfileId = null;
-        state.favoriteChannelIds = [];
-
-        const libraryItems = buildLibraryItems(res.channels, res.vod, res.series);
-        loadChannels(libraryItems);
-
-        connInfo.classList.remove('hidden');
-        connLabel.textContent = '✅ Connecté';
-        connCount.textContent = libraryItems.length;
-        $('btn-save-profile').classList.remove('hidden');
-        state.saveContext = 'stalker';
-        toast(`✅ ${res.channels.length} chaînes chargées`);
-    } catch (err) {
-        toast(`❌ ${err.message}`);
-    } finally {
-        btn.disabled = false;
-        btn.textContent = '🔗 Connexion';
+// ── Retry overlay ─────────────────────────────────────────────────────────────
+$('btn-retry').onclick = () => {
+    if (state.currentChannel) {
+        state.retryCount = 0;
+        playChannel(state.currentChannel);
     }
 };
 
-//17. 💾 SAVE PROFILE
+// ── Helpers UI ────────────────────────────────────────────────────────────────
+function showLoading() {
+    loadingOverlay.classList.remove('hidden');
+    errorOverlay.classList.add('hidden');
+    placeholder.classList.add('hidden');
+}
 
-$('btn-save-profile').onclick = () => {
-    state.saveContext = 'stalker';
-    $('profile-name-input').value = '';
-    $('save-profile-modal').classList.remove('hidden');
-    $('profile-name-input').focus();
-};
+function hideLoading() {
+    loadingOverlay.classList.add('hidden');
+}
 
-$('confirm-save-profile').onclick = async () => {
-    const name = $('profile-name-input').value.trim();
-    if (!name) return toast('⚠️ Nom requis');
+function showError(msg) {
+    loadingOverlay.classList.add('hidden');
+    placeholder.classList.add('hidden');
+    $('error-msg').textContent = msg;
+    errorOverlay.classList.remove('hidden');
+}
 
-    const data = {
-        name,
-        channels: state.channels,
-        favoriteChannelIds: state.favoriteChannelIds,
-    };
-
-    if (state.saveContext === 'stalker') {
-        data.type = 'stalker';
-        data.portalUrl = $('portal-url').value.trim();
-        data.mac = $('portal-mac').value.trim();
-        data.stalkerSession = state.stalkerSession;
-    } else {
-        data.type = 'stalker';
-        data.portalUrl = '';
-        data.mac = '';
-    }
-
-    const result = await window.electronAPI.profileSave(data);
-    state.currentProfileId = result.id;
-    $('save-profile-modal').classList.add('hidden');
-    await refreshProfilesList();
-    toast(`💾 Profil "${name}" sauvegardé (${state.channels.length} chaînes)`);
-};
-
-$('confirm-edit-profile').onclick = async () => {
-    const id = state.renameProfileId;
-
-    const name = $('edit-name').value.trim();
-    const portalUrl = $('edit-url').value.trim();
-    const mac = $('edit-mac').value.trim();
-
-    if (!name) return toast("Nom requis");
-
-    await window.electronAPI.profileUpdate({
-        id,
-        name,
-        portalUrl,
-        mac
-    });
-
-    $('edit-profile-modal').classList.add('hidden');
-
-    await refreshProfilesList();
-
-    toast("✅ Profil modifié");
-};
-
-
-//18. ⌨️ KEYBOARD SHORTCUTS
-
+// ── Raccourcis clavier ────────────────────────────────────────────────────────
 document.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT') return;
     if (e.key === "/") {
@@ -1442,238 +1645,62 @@ document.addEventListener('keydown', (e) => {
     }
 });
 
-//19. 🚀 INIT
+function navigateChannel(direction) {
+    if (!state.filtered.length) return;
+    const currentIdx = state.filtered.findIndex((c) => getChannelKey(c) === getChannelKey(state.currentChannel));
+    let nextIdx = currentIdx + direction;
+    if (nextIdx < 0) nextIdx = state.filtered.length - 1;
+    if (nextIdx >= state.filtered.length) nextIdx = 0;
+    playChannel(state.filtered[nextIdx]);
+}
 
-document.addEventListener("DOMContentLoaded", async () => {
-    renderWelcomeProfiles();
+video.addEventListener('dblclick', () => toggleFullscreen());
 
-    const lastProfileId = localStorage.getItem("lastProfileId");
+$('confirm-rename-profile').onclick = async () => {
+    const name = $('rename-profile-input').value.trim();
+    if (!state.renameProfileId) return;
+    if (!name) return toast('⚠️ Nom requis');
 
-    if (lastProfileId) {
-        try {
-            await loadProfile(lastProfileId);
-            welcomeScreen?.classList.add("hidden");
-        } catch (e) {
-            console.log("Auto load profil failed");
-        }
-    }
-});
-
-let scrollTimeout;
-
-channelList.addEventListener('scroll', () => {
-    if (scrollTimeout) return;
-
-    scrollTimeout = setTimeout(() => {
-        renderChannels('scroll');
-        scrollTimeout = null;
-    }, 16);
-});
-
-(async () => {
-    state.config = await window.electronAPI.getConfig();
-    $('cfg-ua').value = state.config.userAgent || '';
-    $('cfg-timeout').value = state.config.networkTimeout || 60;
-    $('cfg-referrer').value = state.config.referrer || '';
-    $('cfg-headers').value = state.config.headerFields || '';
-    $('cfg-vlc').value = state.config.vlcPath || '';
-    siUa.textContent = state.config.userAgent || '';
+    await window.electronAPI.profileRename({id: state.renameProfileId, name});
+    closeRenameProfileModal();
     await refreshProfilesList();
-})();
+    toast(`✏️ Profil renommé en "${name}"`);
+};
 
-//20. MANQUANTS
-
-function showLoading() {
-    loadingOverlay.classList.remove('hidden');
-    errorOverlay.classList.add('hidden');
-    placeholder.classList.add('hidden');
-}
-
-function hideLoading() {
-    loadingOverlay.classList.add('hidden');
-}
-
-function showError(msg) {
-    loadingOverlay.classList.add('hidden');
-    placeholder.classList.add('hidden');
-    $('error-msg').textContent = msg;
-    errorOverlay.classList.remove('hidden');
-}
-
-function getVideoError(err) {
-    if (!err) return 'Erreur inconnue';
-    switch (err.code) {
-        case 1:
-            return 'Lecture interrompue';
-        case 2:
-            return 'Erreur réseau — flux inaccessible';
-        case 3:
-            return 'Erreur de décodage';
-        case 4:
-            return 'Format non supporté';
-        default:
-            return err.message || 'Erreur inconnue';
-    }
-}
-
-function revealVideo() {
-    video.style.opacity = '1';
-    hideLoading();
-    placeholder.classList.add('hidden');
-    errorOverlay.classList.add('hidden');
-}
-
-function getProfileDisplayCount(items) {
-    return `${items.length} elements`;
-}
-
-video.addEventListener('canplay', () => {
-    hideLoading();
-});
-
-video.addEventListener('stalled', () => {
-    if (video.style.opacity === '1') {
-        loadingOverlay.classList.remove('hidden');
+$('rename-profile-input').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+        event.preventDefault();
+        $('confirm-rename-profile').click();
     }
 });
 
-video.addEventListener('durationchange', refreshSeekBar);
+const btnSidebarToggle = document.getElementById("btn-sidebar-toggle");
+const sidebarBackdrop = document.getElementById("sidebar-backdrop");
 
-video.addEventListener('ended', () => {
-    if (!isSeekableContent()) return;
-    seekBar.value = '1000';
-    refreshSeekBar();
-});
+document.body.classList.remove("sidebar-collapsed");
 
-btnSettings?.addEventListener("click", toggleSettings);
+function openSidebar() {
+    document.body.classList.remove("sidebar-collapsed");
+    sidebarBackdrop.classList.remove("hidden");
+}
 
-closeSettingsBtn?.addEventListener("click", closeSettings);
+function closeSidebar() {
+    document.body.classList.add("sidebar-collapsed");
+    sidebarBackdrop.classList.add("hidden");
+}
 
-settingsModal?.addEventListener("click", (e) => {
-    if (e.target === settingsModal) {
-        closeSettings();
+function toggleSidebar() {
+    const isCollapsed = document.body.classList.contains("sidebar-collapsed");
+    if (isCollapsed) {
+        openSidebar();
+    } else {
+        closeSidebar();
     }
-});
-
-btnEnterApp?.addEventListener("click", () => {
-    welcomeScreen?.classList.add("hidden");
-});
-
-accentInput?.addEventListener("input", (e) => {
-    applyAccentColor(e.target.value);
-});
+}
 
 btnSidebarToggle?.addEventListener("click", toggleSidebar);
 sidebarBackdrop?.addEventListener("click", closeSidebar);
 
-document.querySelectorAll('.tab').forEach((btn) => {
-    btn.onclick = () => {
-        document.querySelectorAll('.tab').forEach((b) => b.classList.remove('active'));
-        document.querySelectorAll('.tab-pane').forEach((p) => p.classList.add('hidden'));
-        btn.classList.add('active');
-        $(`tab-${btn.dataset.tab}`).classList.remove('hidden');
-    };
-});
-
-$('portal-mac').addEventListener('input', function () {
-    let v = this.value.toUpperCase().replace(/[^0-9A-F]/g, '');
-    v = v.match(/.{1,2}/g)?.join(':') || v;
-    this.value = v.slice(0, 17);
-});
-
-function setMode(mode) {
-    state.currentMode = mode;
-    modeLiveBtn.classList.toggle('active', mode === 'live');
-    modeVodBtn.classList.toggle('active', mode === 'vod');
-    modeSeriesBtn.classList.toggle('active', mode === 'series');
-    seriesBackBtn.classList.toggle('hidden', mode !== 'series-episodes');
-    filterAndRender();
+function toggleTvMode() {
+    document.body.classList.toggle("tv-mode");
 }
-
-modeLiveBtn.onclick = () => {
-    state.seriesEpisodes = [];
-    state.seriesStack = [];
-    setMode('live');
-};
-
-modeVodBtn.onclick = () => {
-    state.seriesEpisodes = [];
-    state.seriesStack = [];
-    setMode('vod');
-};
-
-modeSeriesBtn.onclick = () => {
-    state.seriesEpisodes = [];
-    state.seriesStack = [];
-    setMode('series');
-};
-
-seriesBackBtn.onclick = () => {
-    const prev = state.seriesStack.pop();
-    state.seriesEpisodes = prev || [];
-    setMode('series');
-};
-
-//▶️ Auto-hide des contrôles
-
-let controlsTimer;
-
-function showControls() {
-    videoControls.classList.add('visible');
-
-    clearTimeout(controlsTimer);
-    controlsTimer = setTimeout(() => {
-        videoControls.classList.remove('visible');
-    }, 3000);
-}
-
-videoWrap.addEventListener('mousemove', showControls);
-videoWrap.addEventListener('mouseenter', showControls);
-
-video.addEventListener('click', () => {
-    if (video.paused) video.play();
-    else video.pause();
-});
-
-video.addEventListener('dblclick', toggleFullscreen);
-
-//📺 21. EPG VISUEL (GROS + UX)
-
-function showEPGOverlay(channel) {
-    const overlay = $('epg-overlay');
-    const title = $('epg-title');
-    const now = $('epg-now');
-
-    title.textContent = channel.name;
-
-    const epg = state.epg[channel.id]
-        || state.epg[channel.name]
-        || state.epg[channel.number];
-
-    if (epg) {
-        now.textContent = `${epg.now || ''} ${epg.next ? '→ ' + epg.next : ''}`;
-    } else {
-        now.textContent = channel.group;
-    }
-
-    overlay.classList.remove('hidden');
-}
-
-// 🖼️ 22. MODE PICTURE-IN-PICTURE
-$('vc-pip').onclick = async () => {
-    try {
-        if (!document.pictureInPictureEnabled) {
-            toast("❌ PiP non supporté");
-            return;
-        }
-
-        if (video !== document.pictureInPictureElement) {
-            await video.requestPictureInPicture();
-        } else {
-            await document.exitPictureInPicture();
-        }
-    } catch (err) {
-        console.error(err);
-        toast("❌ Erreur PiP");
-    }
-};
