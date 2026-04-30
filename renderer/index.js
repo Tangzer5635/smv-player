@@ -148,13 +148,14 @@ settingsModal?.addEventListener("click", (e) => {
 
 btnEnterApp?.addEventListener("click", () => {
     welcomeScreen?.classList.add("hidden");
+    document.body.classList.remove("on-welcome"); // 🔥 FIX
 });
 
 document.addEventListener("DOMContentLoaded", async () => {
-    renderWelcomeProfiles();
+    await renderWelcomeProfiles();
 
     const lastProfileId = localStorage.getItem("lastProfileId");
-
+    document.body.classList.add("on-welcome");
     if (lastProfileId) {
         try {
             await loadProfile(lastProfileId);
@@ -179,10 +180,11 @@ $('btn-toggle-cats').onclick = () => {
 
 /*Welcome*/
 
-function renderWelcomeProfiles() {
+async function renderWelcomeProfiles() {
     if (!welcomeProfilesGrid || !welcomeProfilesCount) return;
 
-    const profiles = getSavedProfiles();
+    const profiles = await window.electronAPI.profilesList();
+
     welcomeProfilesCount.textContent = String(profiles.length);
 
     if (!profiles.length) {
@@ -196,7 +198,7 @@ function renderWelcomeProfiles() {
 
     welcomeProfilesGrid.innerHTML = profiles.map((profile, index) => {
         const name = escHtml(profile.name || `Profil ${index + 1}`);
-        const url = escHtml(profile.portalUrl || profile.portal || profile.url || 'Portail non défini');
+        const url = escHtml(profile.portalUrl || 'Portail non défini');
         const mac = escHtml(profile.mac || 'MAC non définie');
 
         return `
@@ -217,13 +219,10 @@ function renderWelcomeProfiles() {
     welcomeProfilesGrid.querySelectorAll('.welcome-profile-card').forEach((card) => {
         card.addEventListener('click', async () => {
             const profileId = card.dataset.profileId;
-            const profile = getSavedProfiles().find((p) => String(p.id) === String(profileId));
-            if (!profile) return;
-
-            welcomeScreen?.classList.add('hidden');
 
             try {
-                await loadProfile(profile.id);
+                welcomeScreen?.classList.add('hidden');
+                await loadProfile(profileId);
             } catch (err) {
                 console.error(err);
                 toast("Impossible de charger le profil");
@@ -231,6 +230,33 @@ function renderWelcomeProfiles() {
         });
     });
 }
+
+function goToWelcome() {
+    if (state.currentChannel) {
+        const confirmLeave = confirm("Quitter la lecture en cours ?");
+        if (!confirmLeave) return;
+    }
+
+    destroyPlayer();
+
+    state.currentChannel = null;
+    state.channels = [];
+    state.filtered = [];
+
+    channelList.innerHTML = '';
+
+    nowName.textContent = '—';
+    nowGroup.textContent = '';
+    connInfo.classList.add('hidden');
+
+    welcomeScreen?.classList.remove('hidden');
+
+    document.body.classList.add('on-welcome'); // 👈 important
+
+    renderWelcomeProfiles();
+}
+
+$('btn-home')?.addEventListener('click', goToWelcome);
 
 /*EPG*/
 
@@ -318,12 +344,6 @@ document.getElementById("save-settings")?.addEventListener("click", () => {
     const color = accentInput?.value || "#6c5ce7";
     applyAccentColor(color);
     localStorage.setItem("accentColor", color);
-});
-
-accentInput.addEventListener("input", (e) => {
-    const color = e.target.value;
-    document.documentElement.style.setProperty("--accent", color);
-    document.documentElement.style.setProperty("--accent2", lightenColor(color, 30));
 });
 
 function escHtml(s) {
@@ -515,14 +535,6 @@ async function reloadProfileLibrary(profile) {
     return {session, items: libraryItems};
 }
 
-function openRenameProfileModal(profileId, currentName) {
-    state.renameProfileId = profileId;
-    $('rename-profile-input').value = currentName || '';
-    renameProfileModal.classList.remove('hidden');
-    $('rename-profile-input').focus();
-    $('rename-profile-input').select();
-}
-
 function openEditProfileModal(profile) {
     state.renameProfileId = profile.id;
 
@@ -532,6 +544,35 @@ function openEditProfileModal(profile) {
 
     $('edit-profile-modal').classList.remove('hidden');
 }
+
+$('edit-profile-modal').addEventListener('click', (e) => {
+    if (e.target.id === 'edit-profile-modal') {
+        $('edit-profile-modal').classList.add('hidden');
+    }
+});
+
+$('copy-url').onclick = () => {
+    const value = $('edit-url').value;
+    navigator.clipboard.writeText(value);
+    toast("📋 URL copiée");
+};
+
+$('copy-mac').onclick = () => {
+    const value = $('edit-mac').value;
+    navigator.clipboard.writeText(value);
+    toast("📋 MAC copiée");
+};
+
+['edit-url', 'edit-mac'].forEach(id => {
+    const el = $(id);
+    if (!el) return;
+
+    el.addEventListener('click', () => {
+        el.select();
+        navigator.clipboard.writeText(el.value);
+        toast("📋 Copié");
+    });
+});
 
 function closeRenameProfileModal() {
     state.renameProfileId = null;
@@ -637,23 +678,24 @@ async function loadProfile(profileId) {
     const profile = result.profile;
 
     state.currentProfileId = profile.id;
+    document.body.classList.remove('on-welcome');
+
     localStorage.setItem("lastProfileId", profile.id);
     state.favoriteChannelIds = (profile.favoriteChannelIds || []).map(String);
 
     $('portal-url').value = profile.portalUrl || '';
     $('portal-mac').value = profile.mac || '';
 
-    const CACHE_DURATION = 1000 * 60 * 60; // 1h
+    const CACHE_DURATION = Infinity;
 
     const isCacheValid =
         profile.channels &&
-        profile.channels.length > 0 &&
-        (Date.now() - new Date(profile.updatedAt).getTime() < CACHE_DURATION);
+        profile.channels.length > 0;
 
     if (isCacheValid) {
         state.stalkerSession = profile.stalkerSession || null;
 
-        loadChannels(profile.channels);
+        loadChannels(profile.channels, {autoPlay: false});
         connInfo.classList.remove('hidden');
         connLabel.textContent = `📁 ${profile.name} (cache)`;
         connCount.textContent = profile.channels.length;
@@ -697,20 +739,6 @@ async function loadProfile(profileId) {
     await refreshProfilesList();
 }
 
-function renderProfiles() {
-    const list = document.getElementById("profiles-list");
-    if (!list) return;
-
-    const profiles = getSavedProfiles();
-
-    list.innerHTML = profiles.map(p => `
-        <div class="profile-item ${p.id === state.currentProfileId ? 'playing' : ''}"
-             onclick="loadProfile('${p.id}')">
-            <div class="profile-name">${p.name || 'Profil'}</div>
-            <div class="profile-meta">${p.portalUrl || p.portal}</div>
-        </div>
-    `).join('');
-}
 
 async function refreshProfile(profileId, type) {
     const result = await window.electronAPI.profileLoad(profileId);
@@ -741,12 +769,12 @@ async function refreshProfile(profileId, type) {
     await refreshProfilesList();
 }
 
-$('btn-save-profile').onclick = () => {
+$('btn-save-profile')?.addEventListener('click', () => {
     state.saveContext = 'stalker';
     $('profile-name-input').value = '';
     $('save-profile-modal').classList.remove('hidden');
     $('profile-name-input').focus();
-};
+});
 $('close-save-profile').onclick = () => $('save-profile-modal').classList.add('hidden');
 $('close-rename-profile').onclick = () => closeRenameProfileModal();
 $('confirm-save-profile').onclick = async () => {
@@ -778,25 +806,21 @@ $('confirm-save-profile').onclick = async () => {
 };
 $('confirm-edit-profile').onclick = async () => {
     const id = state.renameProfileId;
-
     const name = $('edit-name').value.trim();
-    const portalUrl = $('edit-url').value.trim();
-    const mac = $('edit-mac').value.trim();
 
-    if (!name) return toast("Nom requis");
+    if (!name) return toast("⚠️ Nom requis");
 
     await window.electronAPI.profileUpdate({
         id,
-        name,
-        portalUrl,
-        mac
+        name
     });
 
     $('edit-profile-modal').classList.add('hidden');
 
     await refreshProfilesList();
+    await renderWelcomeProfiles();
 
-    toast("✅ Profil modifié");
+    toast("✏️ Profil renommé");
 };
 
 /*Windows Controls*/
@@ -955,15 +979,19 @@ $('btn-connect').onclick = async () => {
     }
 };
 
-function loadChannels(channels) {
+function loadChannels(channels, options = {}) {
+    const {autoPlay = true} = options;
+
     state.channels = channels;
     state.currentGroup = 'all';
     state.currentMode = 'live';
     state.seriesEpisodes = [];
     state.seriesStack = [];
+
     const availableIds = new Set(
         channels.flatMap((channel) => [getChannelKey(channel), getChannelLegacyKey(channel)])
     );
+
     state.favoriteChannelIds = state.favoriteChannelIds.filter((id) => availableIds.has(id));
 
     const liveItems = channels.filter((c) => c.contentType !== 'vod' && c.contentType !== 'series');
@@ -1005,12 +1033,14 @@ function loadChannels(channels) {
     modeSeriesBtn.classList.remove('active');
     seriesBackBtn.classList.add('hidden');
     filterAndRender();
-    const lastChannelId = localStorage.getItem("lastChannelId");
+    if (autoPlay) {
+        const lastChannelId = localStorage.getItem("lastChannelId");
 
-    if (lastChannelId) {
-        const found = channels.find(c => getChannelKey(c) === lastChannelId);
-        if (found) {
-            setTimeout(() => playChannel(found), 500);
+        if (lastChannelId) {
+            const found = channels.find(c => getChannelKey(c) === lastChannelId);
+            if (found) {
+                setTimeout(() => playChannel(found), 500);
+            }
         }
     }
 }
@@ -1149,11 +1179,15 @@ function navigateChannel(direction) {
 
 /*Lecteur*/
 
+function setCurrentChannel(channel) {
+    state.currentChannel = channel;
+    localStorage.setItem("lastChannelId", getChannelKey(channel));
+}
+
 async function playChannel(channel) {
     destroyPlayer();
 
-    state.currentChannel = channel;
-    localStorage.setItem("lastChannelId", getChannelKey(channel));
+    setCurrentChannel(channel)
     state.retryCount = 0;
 
     nowName.textContent = channel.name;
@@ -1651,6 +1685,14 @@ document.addEventListener('keydown', (e) => {
         case 'T':
             toggleTvMode();
             break;
+        case 'h':
+        case 'H':
+            goToWelcome();
+            break;
+        case 'x':
+        case 'X':
+            destroyPlayer();
+            break;
     }
 });
 
@@ -1663,6 +1705,7 @@ sidebarBackdrop?.addEventListener("click", closeSidebar);
 
 function openSidebar() {
     document.body.classList.remove("sidebar-collapsed");
+    document.body.classList.remove("tv-mode");
     sidebarBackdrop.classList.remove("hidden");
 }
 
@@ -1681,5 +1724,13 @@ function toggleSidebar() {
 }
 
 function toggleTvMode() {
-    document.body.classList.toggle("tv-mode");
+    const isTv = document.body.classList.toggle("tv-mode");
+
+    if (isTv) {
+        document.body.classList.add("sidebar-collapsed");
+        sidebarBackdrop.classList.add("hidden");
+    } else {
+        // 👉 tu peux décider de rouvrir ou non
+        document.body.classList.remove("sidebar-collapsed");
+    }
 }

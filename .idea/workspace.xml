@@ -5,14 +5,10 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="cc99b4d8-3bc4-4f06-92a9-8752349da7a0" name="Changes" comment="Version 2 de l'application avec le début de l'EPG">
-      <change afterPath="$PROJECT_DIR$/.idea/jsLibraryMappings.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/renderer/index.js" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/renderer/renderV2.js" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/m3u_player - v0.1.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/m3u_player - v0.1.iml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/renderer/index.html" beforeDir="false" afterPath="$PROJECT_DIR$/renderer/index.html" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/renderer/renderer.js" beforeDir="false" afterPath="$PROJECT_DIR$/renderer/renderer.js" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/renderer/rendererV2.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/renderer/index.js" beforeDir="false" afterPath="$PROJECT_DIR$/renderer/index.js" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/renderer/style.css" beforeDir="false" afterPath="$PROJECT_DIR$/renderer/style.css" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -143,7 +139,7 @@
       <workItem from="1777296759230" duration="2905000" />
       <workItem from="1777442240318" duration="6733000" />
       <workItem from="1777528423697" duration="1081000" />
-      <workItem from="1777536900346" duration="3940000" />
+      <workItem from="1777536900346" duration="6348000" />
     </task>
     <servers />
   </component>

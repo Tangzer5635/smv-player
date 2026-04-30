@@ -1,257 +1,280 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-  <meta charset="UTF-8" />
-  <title>IPTV Player</title>
-  <link rel="icon" type="image/x-icon" href="../assets/icon.ico" />
-  <link rel="stylesheet" href="style.css" />
-  <link rel="icon" type="image/x-icon" href="../assets/icon.ico" />
-  <script src="https://cdn.jsdelivr.net/npm/mpegts.js@1.7.3/dist/mpegts.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.20/dist/hls.min.js"></script>
+    <meta charset="UTF-8"/>
+    <title>IPTV Player</title>
+    <link rel="icon" type="image/x-icon" href="../assets/icon.ico"/>
+    <link rel="stylesheet" href="style.css"/>
+    <link rel="icon" type="image/x-icon" href="../assets/icon.ico"/>
+    <script src="https://cdn.jsdelivr.net/npm/mpegts.js@1.7.3/dist/mpegts.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.20/dist/hls.min.js"></script>
 </head>
 <body>
 <div id="welcome-screen" class="welcome-screen">
-  <div class="welcome-content">
-    <img class="welcome-logo" src="../assets/icon.ico" alt="SMV Player" />
-    <h1>Bienvenue sur SMV Player</h1>
-    <p>
-      Votre application IPTV élégante, simple et rapide.
-    </p>
-    <p class="welcome-sub">
-      Sélectionnez un profil déjà enregistré pour démarrer rapidement, ou entrez dans l'application pour en ajouter un nouveau.
-    </p>
+    <div class="welcome-content">
+        <img class="welcome-logo" src="../assets/icon.ico" alt="SMV Player"/>
+        <h1>Bienvenue sur SMV Player</h1>
+        <p>
+            Votre application IPTV élégante, simple et rapide.
+        </p>
+        <p class="welcome-sub">
+            Sélectionnez un profil déjà enregistré pour démarrer rapidement, ou entrez dans l'application pour en
+            ajouter un nouveau.
+        </p>
 
-    <div class="welcome-profiles-block">
-      <div class="welcome-profiles-head">
-        <span class="welcome-profiles-title">Profils enregistrés</span>
-        <span id="welcome-profiles-count" class="welcome-profiles-count">0</span>
-      </div>
+        <div class="welcome-profiles-block">
+            <div class="welcome-profiles-head">
+                <span class="welcome-profiles-title">Profils enregistrés</span>
+                <span id="welcome-profiles-count" class="welcome-profiles-count">0</span>
+            </div>
 
-      <div id="welcome-profiles-grid" class="welcome-profiles-grid">
-        <div class="welcome-empty">
-          Aucun profil enregistré
+            <div id="welcome-profiles-grid" class="welcome-profiles-grid">
+                <div class="welcome-empty">
+                    Aucun profil enregistré
+                </div>
+            </div>
         </div>
-      </div>
-    </div>
 
-    <button id="btn-enter-app" class="btn-primary welcome-btn">
-      Entrer dans l'application
-    </button>
-  </div>
+        <button id="btn-enter-app" class="btn-primary welcome-btn">
+            Entrer dans l'application
+        </button>
+    </div>
 </div>
 
 <div class="titlebar">
-  <div class="titlebar-left">
-    <span class="app-icon">📺</span>
-    <img class="app-icon app-icon-img" src="../assets/icon.ico" alt="" />
-    <span class="app-name">SMV Player</span>
-  </div>
-  <div class="titlebar-right">
-    <button id="btn-sidebar-toggle" class="tb-btn" title="Menu">☰</button>
-    <button id="btn-settings" class="tb-btn" title="Paramètres">⚙️</button>
-    <button id="btn-minimize" class="tb-btn">─</button>
-    <button id="btn-maximize" class="tb-btn">☐</button>
-    <button id="btn-close" class="tb-btn tb-close">✕</button>
-  </div>
-  <div id="sidebar-backdrop" class="sidebar-backdrop hidden"></div>
+    <div class="titlebar-left">
+        <span class="app-icon">📺</span>
+        <img class="app-icon app-icon-img" src="../assets/icon.ico" alt=""/>
+        <span class="app-name">SMV Player</span>
+    </div>
+    <div class="titlebar-right">
+        <button id="btn-home" class="tb-btn" title="Accueil">🏠</button>
+        <button id="btn-sidebar-toggle" class="tb-btn" title="Menu">☰</button>
+        <button id="btn-settings" class="tb-btn" title="Paramètres">⚙️</button>
+        <button id="btn-minimize" class="tb-btn">─</button>
+        <button id="btn-maximize" class="tb-btn">☐</button>
+        <button id="btn-close" class="tb-btn tb-close">✕</button>
+    </div>
+    <div id="sidebar-backdrop" class="sidebar-backdrop hidden"></div>
 </div>
 
 <div class="main">
-  <div class="sidebar">
-    <div class="source-tabs">
-      <button class="tab active" data-tab="profiles">📁 Profils</button>
-      <button class="tab" data-tab="stalker">🔗 Portail</button>
-    </div>
-
-    <div id="tab-profiles" class="tab-pane">
-      <div id="profiles-list" class="profiles-list">
-        <div class="empty">
-          <div class="empty-icon">📁</div>
-          <p>Aucun profil sauvegardé</p>
+    <div class="sidebar">
+        <div class="source-tabs">
+            <button class="tab active" data-tab="profiles">📁 Profils</button>
+            <button class="tab" data-tab="stalker">🔗 Portail</button>
         </div>
-      </div>
-    </div>
 
-    <div id="tab-stalker" class="tab-pane hidden">
-      <div class="form-group">
-        <label>URL Portail</label>
-        <input type="text" id="portal-url" placeholder="http://example.com/c/" />
-      </div>
-      <div class="form-group">
-        <label>Adresse MAC</label>
-        <input type="text" id="portal-mac" placeholder="00:1A:79:XX:XX:XX" maxlength="17" />
-      </div>
-      <button id="btn-connect" class="btn-primary">🔗 Connexion</button>
-      <button id="btn-save-profile" class="btn-secondary hidden">💾 Sauver profil</button>
-      <div id="conn-info" class="conn-info hidden">
-        <span id="conn-label">Connecté</span>
-        <span id="conn-count" class="conn-count">0</span>
-      </div>
-    </div>
-
-    <div class="cat-header">
-      <span>📂 Catégories</span>
-      <button id="btn-toggle-cats" class="btn-tiny">▼</button>
-    </div>
-    <div id="group-bar" class="group-bar"></div>
-
-    <div class="mode-bar">
-      <button id="btn-mode-live" class="mode-btn active">Live</button>
-      <button id="btn-mode-vod" class="mode-btn">VOD</button>
-      <button id="btn-mode-series" class="mode-btn">Séries</button>
-      <button id="btn-series-back" class="mode-btn hidden">Retour séries</button>
-    </div>
-
-    <div class="search-wrap">
-      <input type="text" id="search" placeholder="🔍 Rechercher..." />
-      <button id="btn-clear-search" class="btn-clear-search">✕</button>
-    </div>
-
-    <div id="channel-list" class="channel-list">
-      <div class="empty">
-        <div class="empty-icon">📺</div>
-        <p>Chargez un profil ou connectez-vous</p>
-      </div>
-    </div>
-  </div>
-
-  <div class="player-area">
-    <div class="now-bar">
-      <span id="live-dot" class="live-dot">● LIVE</span>
-      <span id="now-name" class="now-name">—</span>
-      <span id="now-group" class="now-group"></span>
-    </div>
-    <div id="epg-overlay" class="epg-overlay hidden">
-      <div class="epg-title" id="epg-title">—</div>
-      <div class="epg-now" id="epg-now">—</div>
-    </div>
-
-    <div id="video-wrap" class="video-wrap">
-      <video id="video" autoplay></video>
-
-      <div id="placeholder" class="overlay">
-        <div class="ph-icon">📺</div>
-        <p>Sélectionnez une chaîne</p>
-      </div>
-
-      <div id="loading-overlay" class="overlay hidden">
-        <div class="loader"></div>
-        <p>Chargement du flux...</p>
-      </div>
-
-      <div id="error-overlay" class="overlay hidden">
-        <div class="error-icon">❌</div>
-        <p id="error-msg">Erreur</p>
-        <button id="btn-retry" class="btn-primary" style="width:auto;margin-top:10px;padding:8px 20px;">🔄 Réessayer</button>
-      </div>
-
-      <div id="video-controls" class="video-controls hidden">
-        <div id="vc-progress-wrap" class="vc-progress-wrap hidden">
-          <span id="vc-current-time" class="vc-time">00:00</span>
-          <input id="vc-seek" type="range" min="0" max="1000" value="0" class="vc-progress" />
-          <span id="vc-duration" class="vc-time">00:00</span>
+        <div id="tab-profiles" class="tab-pane">
+            <div id="profiles-list" class="profiles-list">
+                <div class="empty">
+                    <div class="empty-icon">📁</div>
+                    <p>Aucun profil sauvegardé</p>
+                </div>
+            </div>
         </div>
-        <div class="vc-row">
-          <div class="vc-left">
-            <button id="vc-prev" class="vc-btn" title="Chaîne précédente">⏮</button>
-            <button id="vc-play" class="vc-btn vc-play-btn" title="Lecture/Pause">▶</button>
-            <button id="vc-stop" class="vc-btn" title="Stop">⏹</button>
-            <button id="vc-next" class="vc-btn" title="Chaîne suivante">⏭</button>
-          </div>
-          <div class="vc-center">
-            <button id="vc-mute" class="vc-btn" title="Muet">🔊</button>
-            <input id="vc-volume" type="range" min="0" max="100" value="80" class="vc-slider" />
-            <span id="vc-vol-label" class="vc-label">80%</span>
-          </div>
-          <div class="vc-right">
-            <button id="vc-reload" class="vc-btn" title="Recharger">🔄</button>
-            <button id="vc-pip" class="vc-btn" title="Picture-in-Picture">🖼️</button>
-            <button id="vc-fs" class="vc-btn" title="Plein écran">⛶</button>
-          </div>
+
+        <div id="tab-stalker" class="tab-pane hidden">
+            <div class="form-group">
+                <label>URL Portail</label>
+                <input type="text" id="portal-url" placeholder="http://example.com/c/"/>
+            </div>
+            <div class="form-group">
+                <label>Adresse MAC</label>
+                <input type="text" id="portal-mac" placeholder="00:1A:79:XX:XX:XX" maxlength="17"/>
+            </div>
+            <button id="btn-connect" class="btn-primary">🔗 Connexion</button>
+            <button id="btn-save-profile" class="btn-secondary hidden">💾 Sauver profil</button>
+            <div id="conn-info" class="conn-info hidden">
+                <span id="conn-label">Connecté</span>
+                <span id="conn-count" class="conn-count">0</span>
+            </div>
         </div>
-      </div>
+
+        <div class="cat-header">
+            <span>📂 Catégories</span>
+            <button id="btn-toggle-cats" class="btn-tiny">▼</button>
+        </div>
+        <div id="group-bar" class="group-bar"></div>
+
+        <div class="mode-bar">
+            <button id="btn-mode-live" class="mode-btn active">Live</button>
+            <button id="btn-mode-vod" class="mode-btn">VOD</button>
+            <button id="btn-mode-series" class="mode-btn">Séries</button>
+            <button id="btn-series-back" class="mode-btn hidden">Retour séries</button>
+        </div>
+
+        <div class="search-wrap">
+            <input type="text" id="search" placeholder="🔍 Rechercher..."/>
+            <button id="btn-clear-search" class="btn-clear-search">✕</button>
+        </div>
+
+        <div id="channel-list" class="channel-list">
+            <div class="empty">
+                <div class="empty-icon">📺</div>
+                <p>Chargez un profil ou connectez-vous</p>
+            </div>
+        </div>
     </div>
 
-    <div id="stream-info" class="stream-info hidden">
-      <span>📡 <span id="si-url">—</span></span>
-      <span>🌐 <span id="si-ua">—</span></span>
+    <div class="player-area">
+        <div class="now-bar">
+            <span id="live-dot" class="live-dot">● LIVE</span>
+            <span id="now-name" class="now-name">—</span>
+            <span id="now-group" class="now-group"></span>
+        </div>
+        <div id="epg-overlay" class="epg-overlay hidden">
+            <div class="epg-title" id="epg-title">—</div>
+            <div class="epg-now" id="epg-now">—</div>
+        </div>
+
+        <div id="video-wrap" class="video-wrap">
+            <video id="video" autoplay></video>
+
+            <div id="placeholder" class="overlay">
+                <div class="ph-icon">📺</div>
+                <p>Sélectionnez une chaîne</p>
+            </div>
+
+            <div id="loading-overlay" class="overlay hidden">
+                <div class="loader"></div>
+                <p>Chargement du flux...</p>
+            </div>
+
+            <div id="error-overlay" class="overlay hidden">
+                <div class="error-icon">❌</div>
+                <p id="error-msg">Erreur</p>
+                <button id="btn-retry" class="btn-primary" style="width:auto;margin-top:10px;padding:8px 20px;">🔄
+                    Réessayer
+                </button>
+            </div>
+
+            <div id="video-controls" class="video-controls hidden">
+                <div id="vc-progress-wrap" class="vc-progress-wrap hidden">
+                    <span id="vc-current-time" class="vc-time">00:00</span>
+                    <input id="vc-seek" type="range" min="0" max="1000" value="0" class="vc-progress"/>
+                    <span id="vc-duration" class="vc-time">00:00</span>
+                </div>
+                <div class="vc-row">
+                    <div class="vc-left">
+                        <button id="vc-prev" class="vc-btn" title="Chaîne précédente">⏮</button>
+                        <button id="vc-play" class="vc-btn vc-play-btn" title="Lecture/Pause">▶</button>
+                        <button id="vc-stop" class="vc-btn" title="Stop">⏹</button>
+                        <button id="vc-next" class="vc-btn" title="Chaîne suivante">⏭</button>
+                    </div>
+                    <div class="vc-center">
+                        <button id="vc-mute" class="vc-btn" title="Muet">🔊</button>
+                        <input id="vc-volume" type="range" min="0" max="100" value="80" class="vc-slider"/>
+                        <span id="vc-vol-label" class="vc-label">80%</span>
+                    </div>
+                    <div class="vc-right">
+                        <button id="vc-reload" class="vc-btn" title="Recharger">🔄</button>
+                        <button id="vc-pip" class="vc-btn" title="Picture-in-Picture">🖼️</button>
+                        <button id="vc-fs" class="vc-btn" title="Plein écran">⛶</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="stream-info" class="stream-info hidden">
+            <span>📡 <span id="si-url">—</span></span>
+            <span>🌐 <span id="si-ua">—</span></span>
+        </div>
     </div>
-  </div>
 </div>
 
 <div id="settings-modal" class="modal hidden">
-  <div class="modal-content">
-    <div class="modal-header">
-      <h2>⚙️ Paramètres</h2>
-      <button id="close-settings" class="btn-icon">✕</button>
-    </div>
+    <div class="modal-content">
+        <div class="modal-header">
+            <button id="btn-home" class="btn">🏠 Accueil</button>
+            <h2>⚙️ Paramètres</h2>
+            <button id="close-settings" class="btn-icon">✕</button>
+        </div>
 
-    <div class="form-group">
-      <label>User-Agent</label>
-      <input type="text" id="cfg-ua" />
+        <div class="form-group">
+            <label>User-Agent</label>
+            <input type="text" id="cfg-ua"/>
+        </div>
+        <div class="form-group">
+            <label>Timeout (s)</label>
+            <input type="number" id="cfg-timeout"/>
+        </div>
+        <div class="form-group">
+            <label>Referrer</label>
+            <input type="text" id="cfg-referrer"/>
+        </div>
+        <div class="form-group">
+            <label>Headers (key:val,key2:val2)</label>
+            <input type="text" id="cfg-headers"/>
+        </div>
+        <div class="form-group">
+            <label>VLC path (optionnel)</label>
+            <input type="text" id="cfg-vlc" placeholder="C:\Program Files\VideoLAN\VLC\vlc.exe"/>
+        </div>
+        <div class="form-group">
+            <label>Couleur principale</label>
+            <input type="color" id="cfg-accent" value="#6c5ce7"/>
+        </div>
+        <button id="btn-browse-vlc" class="btn-secondary" type="button">Parcourir VLC</button>
+        <button id="save-settings" class="btn-primary">💾 Sauvegarder</button>
     </div>
-    <div class="form-group">
-      <label>Timeout (s)</label>
-      <input type="number" id="cfg-timeout" />
-    </div>
-    <div class="form-group">
-      <label>Referrer</label>
-      <input type="text" id="cfg-referrer" />
-    </div>
-    <div class="form-group">
-      <label>Headers (key:val,key2:val2)</label>
-      <input type="text" id="cfg-headers" />
-    </div>
-    <div class="form-group">
-      <label>VLC path (optionnel)</label>
-      <input type="text" id="cfg-vlc" placeholder="C:\Program Files\VideoLAN\VLC\vlc.exe" />
-    </div>
-    <div class="form-group">
-      <label>Couleur principale</label>
-      <input type="color" id="cfg-accent" value="#6c5ce7" />
-    </div>
-    <button id="btn-browse-vlc" class="btn-secondary" type="button">Parcourir VLC</button>
-    <button id="save-settings" class="btn-primary">💾 Sauvegarder</button>
-  </div>
 </div>
 
 <div id="save-profile-modal" class="modal hidden">
-  <div class="modal-content modal-sm">
-    <div class="modal-header">
-      <h2>💾 Sauvegarder le profil</h2>
-      <button id="close-save-profile" class="btn-icon">✕</button>
+    <div class="modal-content modal-sm">
+        <div class="modal-header">
+            <h2>💾 Sauvegarder le profil</h2>
+            <button id="close-save-profile" class="btn-icon">✕</button>
+        </div>
+        <div class="form-group">
+            <label>Nom du profil</label>
+            <input type="text" id="profile-name-input" placeholder="Mon IPTV..."/>
+        </div>
+        <button id="confirm-save-profile" class="btn-primary">✅ Sauvegarder</button>
     </div>
-    <div class="form-group">
-      <label>Nom du profil</label>
-      <input type="text" id="profile-name-input" placeholder="Mon IPTV..." />
-    </div>
-    <button id="confirm-save-profile" class="btn-primary">✅ Sauvegarder</button>
-  </div>
 </div>
 
 <div id="rename-profile-modal" class="modal hidden">
-  <div class="modal-content modal-sm">
-    <div class="modal-header">
-      <h2>✏️ Renommer le profil</h2>
-      <button id="close-rename-profile" class="btn-icon">✕</button>
+    <div class="modal-content modal-sm">
+        <div class="modal-header">
+            <h2>✏️ Renommer le profil</h2>
+            <button id="close-rename-profile" class="btn-icon">✕</button>
+        </div>
+        <div class="form-group">
+            <label>Nouveau nom du profil</label>
+            <input type="text" id="rename-profile-input" placeholder="Nom du profil..."/>
+        </div>
+        <button id="confirm-rename-profile" class="btn-primary">✅ Renommer</button>
     </div>
-    <div class="form-group">
-      <label>Nouveau nom du profil</label>
-      <input type="text" id="rename-profile-input" placeholder="Nom du profil..." />
-    </div>
-    <button id="confirm-rename-profile" class="btn-primary">✅ Renommer</button>
-  </div>
 </div>
 <div id="edit-profile-modal" class="modal hidden">
-  <div class="modal-content">
-    <h2>Modifier profil</h2>
+    <div class="modal-content">
+        <h2>Modifier profil</h2>
+        <div class="form-group">
+            <label>Nom du profil</label>
+            <input id="edit-name" placeholder="Nom du profil"/>
+        </div>
 
-    <input id="edit-name" placeholder="Nom">
-    <input id="edit-url" placeholder="URL portail">
-    <input id="edit-mac" placeholder="MAC">
+        <div class="form-group">
+            <label>URL du portail</label>
+            <div class="readonly-field">
+                <input id="edit-url" readonly/>
+                <button id="copy-url">📋</button>
+            </div>
+        </div>
 
-    <button id="confirm-edit-profile">Sauvegarder</button>
-  </div>
+        <div class="form-group">
+            <label>Adresse MAC</label>
+            <div class="readonly-field">
+                <input id="edit-mac" readonly/>
+                <button id="copy-mac">📋</button>
+            </div>
+        </div>
+
+        <div class="modal-actions">
+            <button id="confirm-edit-profile">💾 Enregistrer</button>
+        </div>
+    </div>
 </div>
 
 <div id="toast" class="toast"></div>
