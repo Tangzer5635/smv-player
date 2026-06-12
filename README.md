@@ -1,137 +1,134 @@
-# 🚀 SMV Player — Git Workflow Multi-PC
+# 🎬 SMV Player
 
-## 📌 Objectif
-
-Travailler sur plusieurs ordinateurs (maison, portable, boulot) **sans conflit Git** et avec un workflow simple.
+Lecteur IPTV moderne développé avec Electron permettant de charger des playlists M3U, parcourir les chaînes et intégrer progressivement un guide TV (EPG).
 
 ---
 
-## 🧠 Principe
+## ✨ Fonctionnalités
 
-👉 GitLab est ton point central
-👉 Chaque ordinateur = une copie (clone) du projet
+* 📺 Lecture de playlists M3U
+* 🔍 Recherche de chaînes
+* 📂 Organisation des groupes de chaînes
+* ⚡ Interface Electron rapide et légère
+* 🗓️ Support EPG (en cours de développement)
+* 💾 Sauvegarde locale de la configuration
 
 ---
 
-## ⚙️ 1. Installation (UNE FOIS par PC)
+## 🛠️ Technologies utilisées
+
+* Electron
+* JavaScript
+* HTML5
+* CSS3
+
+---
+
+## 🚀 Installation
+
+### Prérequis
+
+* Node.js 20+
+* npm
+
+### Cloner le projet
 
 ```bash
-git clone https://gitlab.com/tangzer-group/smv-player.git
+git clone https://github.com/Tangzer5635/smv-player.git
 cd smv-player
+```
+
+### Installer les dépendances
+
+```bash
 npm install
 ```
 
+### Lancer l'application
+
+```bash
+npm start
+```
+
 ---
 
-## 🔄 2. Workflow quotidien
+## 📁 Structure du projet
 
-### ▶️ Avant de coder
+```text
+smv-player/
+├── assets/
+├── renderer/
+│   ├── index.html
+│   ├── renderer.js
+│   └── style.css
+├── main.js
+├── preload.js
+├── package.json
+└── README.md
+```
+
+---
+
+## 🔄 Workflow Git
+
+Avant de commencer à développer :
 
 ```bash
 git pull origin main
 ```
 
----
-
-### 💻 Tu développes normalement
-
-* Code
-* Test
-* Modifie tes fichiers
-
----
-
-### 💾 Sauvegarder ton travail
+Après modification :
 
 ```bash
 git add .
-git commit -m "description des changements"
+git commit -m "Description des changements"
 git push origin main
 ```
 
----
-
-## 🧩 3. Workflow simple résumé
+Workflow rapide :
 
 ```bash
 git pull origin main
-# coder
+
+# Développement
+
 git add .
-git commit -m "update"
+git commit -m "Update"
 git push origin main
 ```
 
 ---
 
-## 🏢 4. Cas du PC du boulot (proxy / réseau bloqué)
+## 📋 Bonnes pratiques
 
-### ❌ Si Git est bloqué :
+Ne jamais versionner :
 
-* Utiliser une clé USB
-* Ou Google Drive / Dropbox
-* Ou zip du projet
-
-👉 Puis commit depuis un autre PC
-
----
-
-## ⚠️ 5. Règles IMPORTANTES
-
-❌ Ne jamais faire :
-
-* `git init` sur ce projet
-* push sur `master` (utiliser `main`)
-* commit `node_modules`
-
----
-
-## ✅ Toujours faire :
-
-* `git pull` avant de travailler
-* `git push` après
-* garder ton repo propre
-
----
-
-## 📁 .gitignore recommandé
-
-```bash
+```text
 node_modules/
 dist/
 .env
 ```
 
----
+Toujours :
 
-## 🔥 Bonus (optionnel mais recommandé)
-
-### Travailler avec des branches :
-
-```bash
-git checkout -b feature-nouvelle-fonction
-git push origin feature-nouvelle-fonction
-```
-
-👉 Permet d’éviter de casser `main`
+* Faire un `git pull` avant de commencer
+* Faire des commits clairs
+* Tester avant de pousser
 
 ---
 
-## 🧾 Conclusion
+## 🗺️ Roadmap
 
-✔ Un seul repo central
-✔ Plusieurs machines synchronisées
-✔ Zéro conflit si tu respectes le workflow
-
----
-
-## 💬 Besoin d’aide ?
-
-Si tu bloques :
-
-* erreur Git
-* problème de merge
-* config Electron
-
-👉 Corrige direct plutôt que forcer (ex: `--force`)
+* [x] Chargement des playlists M3U
+* [x] Interface Electron
+* [ ] Gestion avancée des favoris
+* [ ] EPG complet
+* [ ] Enregistrement des chaînes
+* [ ] Gestion multi-profils
+* [ ] Packaging Windows
 
 ---
+
+## 📄 Licence
+
+Projet personnel développé par Tanguy Le Buhé.
