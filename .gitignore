@@ -1,7 +1,14 @@
 node_modules/
 dist/
+out/
+release/
+
+.idea/
+.vscode/
+
 *.log
 *.mp4
 *.zip
-.idea/
-allfiles.txt
+
+.DS_Store
+Thumbs.db
