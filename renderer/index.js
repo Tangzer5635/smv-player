@@ -71,9 +71,9 @@ function hexToRgb(hex) {
 }
 
 function lightenColor(hex, pct) {
-    const n   = parseInt(hex.replace('#', ''), 16);
+    const n = parseInt(hex.replace('#', ''), 16);
     const amt = Math.round(2.55 * pct);
-    const c   = (v) => Math.min(255, Math.max(0, v));
+    const c = (v) => Math.min(255, Math.max(0, v));
     return '#' + (
         0x1000000 +
         c((n >> 16) + amt) * 0x10000 +
@@ -86,6 +86,7 @@ function applyAccentColor(color) {
     document.documentElement.style.setProperty('--accent', color);
     document.documentElement.style.setProperty('--accent2', lightenColor(color, 30));
     document.documentElement.style.setProperty('--accent-rgb', hexToRgb(color));
+    document.body.style.setProperty('--profile-color', color);
 }
 
 // Debounce générique
@@ -104,30 +105,43 @@ function debounce(fn, delay) {
 const HISTORY_MAX = 10;
 const HISTORY_KEY = 'smv_history';
 
-function loadHistory() {
-    try {
-        state.history = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
-    } catch (_) {
+async function loadHistory() {
+    if (!state.currentProfileId) {
         state.history = [];
+        return;
     }
+
+    const res =
+        await window.electronAPI.profileLoad(
+            state.currentProfileId
+        );
+
+    state.history =
+        res.profile?.history || [];
 }
 
-function addToHistory(ch) {
+async function addToHistory(ch) {
     // Dédupliquer — retirer si déjà présent
     state.history = state.history.filter((h) => getChannelKey(h) !== getChannelKey(ch));
     // Ajouter en tête
     state.history.unshift({
-        id:          ch.id,
-        name:        ch.name,
-        logo:        ch.logo || '',
-        group:       ch.group,
+        id: ch.id,
+        name: ch.name,
+        logo: ch.logo || '',
+        group: ch.group,
         contentType: ch.contentType || 'live',
-        cmd:         ch.cmd,
-        number:      ch.number || '',
+        cmd: ch.cmd,
+        number: ch.number || '',
     });
     // Limiter à HISTORY_MAX
     if (state.history.length > HISTORY_MAX) state.history = state.history.slice(0, HISTORY_MAX);
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(state.history));
+    if (state.currentProfileId) {
+        await window.electronAPI.profileUpdate({
+            id: state.currentProfileId,
+            history: state.history
+        });
+    }
+
     updateHistoryChip();
 }
 
@@ -150,25 +164,37 @@ function getChannelLegacyKey(ch) {
 
 function buildLibraryItems(live = [], vod = [], series = []) {
     return [
-        ...live.map((item, i) => ({ ...item, contentType: 'live',   number: item.number || i + 1, group: item.group || 'Live' })),
-        ...vod.map((item)     => ({ ...item, contentType: 'vod',    number: '', group: `VOD • ${item.category || 'Films'}` })),
-        ...series.map((item)  => ({ ...item, contentType: 'series', number: '', group: `SERIES • ${item.category || 'Series'}`, isSeries: item.isSeries ?? true, seriesId: item.seriesId || item.id })),
+        ...live.map((item, i) => ({
+            ...item,
+            contentType: 'live',
+            number: item.number || i + 1,
+            group: item.group || 'Live'
+        })),
+        ...vod.map((item) => ({...item, contentType: 'vod', number: '', group: `VOD • ${item.category || 'Films'}`})),
+        ...series.map((item) => ({
+            ...item,
+            contentType: 'series',
+            number: '',
+            group: `SERIES • ${item.category || 'Series'}`,
+            isSeries: item.isSeries ?? true,
+            seriesId: item.seriesId || item.id
+        })),
     ];
 }
 
 function getEpisodeLabel(item, fallbackIndex = 0) {
-    const season  = toIntOrNull(item.season_num ?? item.season_number ?? item.season ?? item.season_id);
+    const season = toIntOrNull(item.season_num ?? item.season_number ?? item.season ?? item.season_id);
     const episode = toIntOrNull(item.episode_num ?? item.episode_number ?? item.series_number ?? item.series ?? item.number ?? item.sort_num) ?? fallbackIndex + 1;
-    const title   = item.name || item.title || item.episode_name || `Episode ${episode}`;
-    const p       = (n) => String(n).padStart(2, '0');
+    const title = item.name || item.title || item.episode_name || `Episode ${episode}`;
+    const p = (n) => String(n).padStart(2, '0');
     return season ? `S${p(season)}E${p(episode)} - ${title}` : `E${p(episode)} - ${title}`;
 }
 
 function getEpisodeMeta(item, seriesItem) {
-    const season  = toIntOrNull(item.season_num ?? item.season_number ?? item.season ?? item.season_id);
+    const season = toIntOrNull(item.season_num ?? item.season_number ?? item.season ?? item.season_id);
     const episode = toIntOrNull(item.episode_num ?? item.episode_number ?? item.series_number ?? item.series ?? item.number ?? item.sort_num);
-    const parts   = [];
-    if (season)  parts.push(`Saison ${season}`);
+    const parts = [];
+    if (season) parts.push(`Saison ${season}`);
     if (episode) parts.push(`Episode ${episode}`);
     parts.push(seriesItem.name || 'Series');
     return parts.join(' • ');
@@ -213,7 +239,7 @@ function updateFavoritesChip() {
 }
 
 async function toggleFavorite(ch) {
-    const key       = getChannelKey(ch);
+    const key = getChannelKey(ch);
     const legacyKey = getChannelLegacyKey(ch);
     if (!key) return;
 
@@ -256,13 +282,22 @@ function updateQualityIndicator(info) {
     const kbps = info.speed ? Math.round(info.speed / 1000) : 0;
     let label, cls;
 
-    if (kbps >= 4000)      { label = `${(kbps / 1000).toFixed(1)} Mbps · HD`;  cls = 'quality-hd';  }
-    else if (kbps >= 1500) { label = `${(kbps / 1000).toFixed(1)} Mbps`;       cls = 'quality-sd';  }
-    else if (kbps > 0)     { label = `${kbps} kbps · Faible`;                   cls = 'quality-low'; }
-    else                   { label = '';                                          cls = ''; }
+    if (kbps >= 4000) {
+        label = `${(kbps / 1000).toFixed(1)} Mbps · HD`;
+        cls = 'quality-hd';
+    } else if (kbps >= 1500) {
+        label = `${(kbps / 1000).toFixed(1)} Mbps`;
+        cls = 'quality-sd';
+    } else if (kbps > 0) {
+        label = `${kbps} kbps · Faible`;
+        cls = 'quality-low';
+    } else {
+        label = '';
+        cls = '';
+    }
 
     el.textContent = label;
-    el.className   = `quality-indicator ${cls}`;
+    el.className = `quality-indicator ${cls}`;
 }
 
 function resetQualityIndicator() {
@@ -308,49 +343,66 @@ function isSeekableContent() {
 }
 
 function refreshSeekBar() {
-    const video   = $('video');
+    const video = $('video');
     const seekBar = $('vc-seek');
     if (!video) return;
-    const duration = Number.isFinite(video.duration)    ? video.duration    : 0;
-    const current  = Number.isFinite(video.currentTime) ? video.currentTime : 0;
-    const durEl    = $('vc-duration');
+    const duration = Number.isFinite(video.duration) ? video.duration : 0;
+    const current = Number.isFinite(video.currentTime) ? video.currentTime : 0;
+    const durEl = $('vc-duration');
     if (durEl) durEl.textContent = formatTime(duration);
     if (!state.isSeekDragging) {
         const curEl = $('vc-current-time');
-        if (curEl)    curEl.textContent = formatTime(current);
-        if (seekBar)  seekBar.value     = duration ? String(Math.min(1000, Math.round((current / duration) * 1000))) : '0';
+        if (curEl) curEl.textContent = formatTime(current);
+        if (seekBar) seekBar.value = duration ? String(Math.min(1000, Math.round((current / duration) * 1000))) : '0';
     }
 }
 
 function getVideoError(err) {
     if (!err) return 'Erreur inconnue';
-    return { 1: 'Lecture interrompue', 2: 'Erreur réseau', 3: 'Erreur de décodage', 4: 'Format non supporté' }[err.code] || err.message || 'Erreur inconnue';
+    return {
+        1: 'Lecture interrompue',
+        2: 'Erreur réseau',
+        3: 'Erreur de décodage',
+        4: 'Format non supporté'
+    }[err.code] || err.message || 'Erreur inconnue';
 }
 
 function destroyPlayer() {
     resetQualityIndicator();
     updateProgressVisibility(false);
-    const seekBar     = $('vc-seek');
+    const seekBar = $('vc-seek');
     const currentTime = $('vc-current-time');
-    const duration    = $('vc-duration');
-    if (seekBar)     seekBar.value     = '0';
+    const duration = $('vc-duration');
+    if (seekBar) seekBar.value = '0';
     if (currentTime) currentTime.textContent = '00:00';
-    if (duration)    duration.textContent    = '00:00';
+    if (duration) duration.textContent = '00:00';
 
     if (state.player) {
-        try { state.player.pause(); state.player.unload(); state.player.detachMediaElement(); state.player.destroy(); } catch (_) {}
+        try {
+            state.player.pause();
+            state.player.unload();
+            state.player.detachMediaElement();
+            state.player.destroy();
+        } catch (_) {
+        }
         state.player = null;
     }
     if (state.hls) {
-        try { state.hls.destroy(); } catch (_) {}
+        try {
+            state.hls.destroy();
+        } catch (_) {
+        }
         state.hls = null;
     }
 
     const video = $('video');
-    if (video) { video.removeAttribute('src'); video.load(); }
+    if (video) {
+        video.removeAttribute('src');
+        video.load();
+    }
 }
 
-function startPlayer(url, { isLive = true, preferHls = false } = {}) {
+function startPlayer(url, {isLive = true, preferHls = false} = {}) {
     const video = $('video');
     if (!video) return;
 
@@ -377,8 +429,14 @@ function startPlayer(url, { isLive = true, preferHls = false } = {}) {
     // mpegts (live) — on écoute aussi STATISTICS_INFO pour le bitrate
     if (isLive && typeof mpegts !== 'undefined' && mpegts.isSupported()) {
         state.player = mpegts.createPlayer(
-            { type: 'mpegts', url, isLive: true },
-            { enableWorker: true, liveBufferLatencyChasing: false, liveBufferLatencyMaxLatency: 8, liveBufferLatencyMinRemain: 5, autoCleanupSourceBuffer: true }
+            {type: 'mpegts', url, isLive: true},
+            {
+                enableWorker: true,
+                liveBufferLatencyChasing: false,
+                liveBufferLatencyMaxLatency: 8,
+                liveBufferLatencyMinRemain: 5,
+                autoCleanupSourceBuffer: true
+            }
         );
         state.player.attachMediaElement(video);
         state.player.load();
@@ -386,22 +444,30 @@ function startPlayer(url, { isLive = true, preferHls = false } = {}) {
             if (info.decodedFrames > 0) onBufferReady();
             updateQualityIndicator(info);
         });
-        state.player.on(mpegts.Events.ERROR, () => { clearTimeout(bufferTimer); retryPlay(); });
+        state.player.on(mpegts.Events.ERROR, () => {
+            clearTimeout(bufferTimer);
+            retryPlay();
+        });
         state.player.play();
         return;
     }
 
     // HLS
     if (preferHls && typeof Hls !== 'undefined' && Hls.isSupported()) {
-        state.hls = new Hls({ enableWorker: true, lowLatencyMode: false });
+        state.hls = new Hls({enableWorker: true, lowLatencyMode: false});
         state.hls.loadSource(url);
         state.hls.attachMedia(video);
         state.hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(retryPlay));
-        state.hls.on(Hls.Events.ERROR, (_, data) => { if (data?.fatal) { clearTimeout(bufferTimer); retryPlay(); } });
+        state.hls.on(Hls.Events.ERROR, (_, data) => {
+            if (data?.fatal) {
+                clearTimeout(bufferTimer);
+                retryPlay();
+            }
+        });
         // Bitrate HLS via FRAG_CHANGED
         state.hls.on(Hls.Events.FRAG_CHANGED, (_, data) => {
             const bw = state.hls?.bandwidthEstimate;
-            if (bw) updateQualityIndicator({ speed: bw });
+            if (bw) updateQualityIndicator({speed: bw});
         });
     } else {
         video.src = url;
@@ -411,13 +477,15 @@ function startPlayer(url, { isLive = true, preferHls = false } = {}) {
     video.addEventListener('canplaythrough', function onReady() {
         video.removeEventListener('canplaythrough', onReady);
         onBufferReady();
-    }, { once: true });
+    }, {once: true});
 }
 
 function retryPlay() {
     state.retryCount++;
     if (state.retryCount <= 3) {
-        setTimeout(() => { if (state.currentChannel) playChannel(state.currentChannel); }, 2000);
+        setTimeout(() => {
+            if (state.currentChannel) playChannel(state.currentChannel);
+        }, 2000);
     } else {
         const video = $('video');
         if (video) video.style.opacity = '1';
@@ -428,15 +496,15 @@ function retryPlay() {
 async function playChannel(ch) {
     destroyPlayer();
     state.currentChannel = ch;
-    state.retryCount     = 0;
+    state.retryCount = 0;
     localStorage.setItem('lastChannelId', getChannelKey(ch));
 
     // Ajouter à l'historique
-    addToHistory(ch);
+    await addToHistory(ch);
 
-    const nowName  = $('now-name');
+    const nowName = $('now-name');
     const nowGroup = $('now-group');
-    if (nowName)  nowName.textContent  = ch.name;
+    if (nowName) nowName.textContent = ch.name;
     if (nowGroup) nowGroup.textContent = ch.group;
     $('live-dot')?.classList.remove('visible');
 
@@ -446,7 +514,7 @@ async function playChannel(ch) {
     $('video-controls')?.classList.remove('hidden');
     renderChannels();
 
-    $('channel-list')?.querySelector('.ch-item.playing')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    $('channel-list')?.querySelector('.ch-item.playing')?.scrollIntoView({block: 'nearest', behavior: 'smooth'});
 
     let streamUrl = ch.cmd;
 
@@ -459,52 +527,68 @@ async function playChannel(ch) {
                 contentType: ch.contentType, seriesIndex: ch.seriesIndex,
                 episodeId: ch.episodeId, containerExtension: ch.containerExtension,
             });
-            if (!res.success) { if (video) video.style.opacity = '1'; showError(res.error || 'Impossible de lire le flux'); return; }
+            if (!res.success) {
+                if (video) video.style.opacity = '1';
+                showError(res.error || 'Impossible de lire le flux');
+                return;
+            }
             streamUrl = res.url;
             if (res.token && res.token !== state.stalkerSession.token) {
                 state.stalkerSession.token = res.token;
                 if (state.currentProfileId) {
                     window.electronAPI.profileUpdate({
                         id: state.currentProfileId,
-                        stalkerSession: { ...state.stalkerSession, token: res.token },
-                    }).catch(() => {});
+                        stalkerSession: {...state.stalkerSession, token: res.token},
+                    }).catch(() => {
+                    });
                 }
             }
-        } catch (err) { if (video) video.style.opacity = '1'; showError(err.message); return; }
+        } catch (err) {
+            if (video) video.style.opacity = '1';
+            showError(err.message);
+            return;
+        }
     }
 
-    if (!streamUrl) { if (video) video.style.opacity = '1'; showError('URL du flux vide'); return; }
+    if (!streamUrl) {
+        if (video) video.style.opacity = '1';
+        showError('URL du flux vide');
+        return;
+    }
 
     const siUrl = $('si-url');
     if (siUrl) siUrl.textContent = streamUrl.length > 60 ? streamUrl.slice(0, 60) + '…' : streamUrl;
     $('stream-info')?.classList.remove('hidden');
 
     try {
-        const headers     = state.stalkerSession?.stalkerHeaders ? JSON.parse(state.stalkerSession.stalkerHeaders) : {};
-        const proxyResult = await window.electronAPI.proxySetTarget({ url: streamUrl, headers });
-        const isVodLike   = ch.contentType === 'vod' || ch.contentType === 'series';
-        startPlayer(proxyResult.proxyUrl, { isLive: !isVodLike, preferHls: /\.m3u8($|\?)/i.test(streamUrl) });
-    } catch (err) { if (video) video.style.opacity = '1'; showError(err.message); }
+        const headers = state.stalkerSession?.stalkerHeaders ? JSON.parse(state.stalkerSession.stalkerHeaders) : {};
+        const proxyResult = await window.electronAPI.proxySetTarget({url: streamUrl, headers});
+        const isVodLike = ch.contentType === 'vod' || ch.contentType === 'series';
+        startPlayer(proxyResult.proxyUrl, {isLive: !isVodLike, preferHls: /\.m3u8($|\?)/i.test(streamUrl)});
+    } catch (err) {
+        if (video) video.style.opacity = '1';
+        showError(err.message);
+    }
 }
 
 // Ouvrir dans VLC
 async function playInVlc() {
     if (!state.currentChannel) return toast('⚠️ Aucune chaîne en cours de lecture');
     const siUrlEl = $('si-url');
-    const url     = siUrlEl?.textContent?.replace('…', '') || '';
+    const url = siUrlEl?.textContent?.replace('…', '') || '';
     if (!url || !url.startsWith('http')) return toast('⚠️ URL du flux introuvable');
 
-    const res = await window.electronAPI.vlcPlay({ url });
+    const res = await window.electronAPI.vlcPlay({url});
     if (res?.success) {
         toast('▶ Ouvert dans VLC');
     } else {
-        toast(`❌ ${res?.error || 'VLC introuvable — configurez le chemin dans les paramètres'}`);
+        toast(`${res?.error || 'VLC introuvable — configurez le chemin dans les paramètres'}`);
     }
 }
 
 function navigateChannel(dir) {
     if (!state.filtered.length) return;
-    const idx  = state.filtered.findIndex((c) => getChannelKey(c) === getChannelKey(state.currentChannel));
+    const idx = state.filtered.findIndex((c) => getChannelKey(c) === getChannelKey(state.currentChannel));
     const next = (idx + dir + state.filtered.length) % state.filtered.length;
     playChannel(state.filtered[next]);
 }
@@ -533,12 +617,12 @@ function renderChannels() {
         return;
     }
 
-    const frag       = document.createDocumentFragment();
+    const frag = document.createDocumentFragment();
     const currentKey = getChannelKey(state.currentChannel);
 
     for (const ch of list) {
         const isPlaying = currentKey === getChannelKey(ch);
-        const isFav     = isFavorite(ch);
+        const isFav = isFavorite(ch);
 
         const div = document.createElement('div');
         div.className = ['ch-item', isPlaying && 'playing', isFav && 'favorite'].filter(Boolean).join(' ');
@@ -557,16 +641,22 @@ function renderChannels() {
       ${isPlaying ? '<span class="ch-play-icon">▶</span>' : ''}`;
 
         div.addEventListener('click', () => {
-            if (state.currentMode === 'series' && ch.isSeries) { openSeriesEpisodes(ch); return; }
+            if (state.currentMode === 'series' && ch.isSeries) {
+                openSeriesEpisodes(ch);
+                return;
+            }
             playChannel(ch);
         });
 
-        const favBtn       = document.createElement('button');
-        favBtn.className   = `ch-fav-btn${isFav ? ' active' : ''}`;
-        favBtn.type        = 'button';
-        favBtn.title       = 'Favori';
+        const favBtn = document.createElement('button');
+        favBtn.className = `ch-fav-btn${isFav ? ' active' : ''}`;
+        favBtn.type = 'button';
+        favBtn.title = 'Favori';
         favBtn.textContent = isFav ? '★' : '☆';
-        favBtn.addEventListener('click', async (e) => { e.stopPropagation(); await toggleFavorite(ch); });
+        favBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            await toggleFavorite(ch);
+        });
         div.appendChild(favBtn);
         frag.appendChild(div);
     }
@@ -577,17 +667,28 @@ function renderChannels() {
 
 function filterAndRender() {
     const query = ($('search')?.value || '').toLowerCase().trim();
-    let list    = state.channels;
+    let list = state.channels;
 
     switch (state.currentMode) {
-        case 'favorites':       list = list.filter(isFavorite); break;
-        case 'history':         list = state.history; break;
-        case 'live':            list = list.filter((c) => c.contentType !== 'vod' && c.contentType !== 'series');
+        case 'favorites':
+            list = list.filter(isFavorite);
+            break;
+        case 'history':
+            list = state.history;
+            break;
+        case 'live':
+            list = list.filter((c) => c.contentType !== 'vod' && c.contentType !== 'series');
             if (state.currentGroup !== 'all') list = list.filter((c) => c.group === state.currentGroup);
             break;
-        case 'vod':             list = list.filter((c) => c.contentType === 'vod'); break;
-        case 'series':          list = list.filter((c) => c.contentType === 'series' && c.isSeries); break;
-        case 'series-episodes': list = state.seriesEpisodes; break;
+        case 'vod':
+            list = list.filter((c) => c.contentType === 'vod');
+            break;
+        case 'series':
+            list = list.filter((c) => c.contentType === 'series' && c.isSeries);
+            break;
+        case 'series-episodes':
+            list = state.seriesEpisodes;
+            break;
     }
 
     if (query) {
@@ -631,8 +732,8 @@ function buildGroupBar(channels) {
     const toggleBtn = $('btn-toggle-cats');
     if (toggleBtn) toggleBtn.textContent = '▼';
 
-    const liveItems      = channels.filter((c) => c.contentType !== 'vod' && c.contentType !== 'series');
-    const groups         = [...new Set(liveItems.map((c) => c.group))].sort();
+    const liveItems = channels.filter((c) => c.contentType !== 'vod' && c.contentType !== 'series');
+    const groups = [...new Set(liveItems.map((c) => c.group))].sort();
     const favoritesCount = channels.filter(isFavorite).length;
 
     const makeChip = (label, count, group, active = false) => {
@@ -644,9 +745,9 @@ function buildGroupBar(channels) {
         return btn;
     };
 
-    groupBar.appendChild(makeChip('📺 Tous',      channels.length,   '',         true));
-    groupBar.appendChild(makeChip('⭐ Favoris',    favoritesCount,    'favorites'));
-    groupBar.appendChild(makeChip('🕐 Récents',    state.history.length, 'history'));
+    groupBar.appendChild(makeChip('📺 Tous', channels.length, '', true));
+    groupBar.appendChild(makeChip('⭐ Favoris', favoritesCount, 'favorites'));
+    groupBar.appendChild(makeChip('🕐 Récents', state.history.length, 'history'));
     groups.forEach((g) => {
         groupBar.appendChild(makeChip(escHtml(g), liveItems.filter((c) => c.group === g).length, g));
     });
@@ -661,12 +762,12 @@ function setMode(mode) {
     filterAndRender();
 }
 
-function loadChannels(channels, { autoPlay = true } = {}) {
-    state.channels       = channels;
-    state.currentGroup   = 'all';
-    state.currentMode    = 'live';
+function loadChannels(channels, {autoPlay = true} = {}) {
+    state.channels = channels;
+    state.currentGroup = 'all';
+    state.currentMode = 'live';
     state.seriesEpisodes = [];
-    state.seriesStack    = [];
+    state.seriesStack = [];
 
     syncFavoritesToChannels(channels);
     buildGroupBar(channels);
@@ -691,18 +792,26 @@ function loadChannels(channels, { autoPlay = true } = {}) {
 }
 
 async function openSeriesEpisodes(seriesItem) {
-    if (!state.stalkerSession) { toast('⚠️ Connexion Stalker requise'); return; }
+    if (!state.stalkerSession) {
+        toast('⚠️ Connexion Stalker requise');
+        return;
+    }
     try {
         const res = await window.electronAPI.stalkerSeriesEpisodes({
             serverBase: state.stalkerSession.serverBase, mac: state.stalkerSession.mac,
             token: state.stalkerSession.token, seriesId: seriesItem.seriesId || seriesItem.id,
             stalkerHeadersJson: state.stalkerSession.stalkerHeaders,
         });
-        if (!res.success) { toast(`❌ ${res.error || 'Impossible de charger la série'}`); return; }
+        if (!res.success) {
+            toast(`❌ ${res.error || 'Impossible de charger la série'}`);
+            return;
+        }
         state.seriesStack.push(state.seriesEpisodes);
         state.seriesEpisodes = normalizeEpisodes(res.items || [], seriesItem);
         setMode('series-episodes');
-    } catch (err) { toast(`❌ ${err.message}`); }
+    } catch (err) {
+        toast(`❌ ${err.message}`);
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -718,7 +827,7 @@ function setConnInfo(label, count) {
 }
 
 async function refreshProfilesList() {
-    const profiles  = await window.electronAPI.profilesList();
+    const profiles = await window.electronAPI.profilesList();
     const container = $('profiles-list');
     if (!container) return;
 
@@ -732,11 +841,29 @@ async function refreshProfilesList() {
     for (const p of profiles) {
         const item = document.createElement('div');
         item.className = `profile-item${state.currentProfileId === p.id ? ' playing' : ''}`;
-        const meta    = p.type === 'stalker' ? `${p.portalUrl} · ${p.mac}` : 'Fichier M3U';
-        const dateStr = new Date(p.updatedAt || p.createdAt).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit' });
+        const meta = p.type === 'stalker' ? `${p.portalUrl} · ${p.mac}` : 'Fichier M3U';
+        const accent =
+            p.settings?.accentColor || '#6c5ce7';
+
+        const hasPin =
+            !!p.settings?.pin;
+        const dateStr = new Date(p.updatedAt || p.createdAt).toLocaleDateString('fr-FR', {
+            day: '2-digit',
+            month: '2-digit',
+            year: '2-digit'
+        });
 
         item.innerHTML = `
-      <div class="profile-icon">${p.type === 'stalker' ? '🔗' : '📄'}</div>
+      <div
+         class="profile-avatar"
+         style="background:${accent}"
+        >
+         ${p.name.charAt(0).toUpperCase()}
+        </div>
+        ${hasPin
+            ? '<span class="profile-pin">🔒 Protégé</span>'
+            : ''
+        }
       <div class="profile-info">
         <div class="profile-name">${escHtml(p.name)}</div>
         <div class="profile-meta">${p.channelCount} chaînes · ${dateStr}</div>
@@ -748,7 +875,9 @@ async function refreshProfilesList() {
         <button class="btn-tiny danger" data-action="delete" data-id="${p.id}" title="Supprimer">🗑️</button>
       </div>`;
 
-        item.addEventListener('click', (e) => { if (!e.target.closest('.profile-actions')) loadProfile(p.id); });
+        item.addEventListener('click', (e) => {
+            if (!e.target.closest('.profile-actions')) loadProfile(p.id);
+        });
         frag.appendChild(item);
     }
 
@@ -758,12 +887,13 @@ async function refreshProfilesList() {
     container.querySelectorAll('[data-action]').forEach((btn) => {
         btn.addEventListener('click', async (e) => {
             e.stopPropagation();
-            const { action, id, type } = btn.dataset;
+            const {action, id, type} = btn.dataset;
             if (action === 'delete') {
                 if (!confirm('Supprimer ce profil ?')) return;
                 await window.electronAPI.profileDelete(id);
                 if (state.currentProfileId === id) {
-                    state.currentProfileId = null; state.channels = [];
+                    state.currentProfileId = null;
+                    state.channels = [];
                     const cl = $('channel-list');
                     if (cl) cl.innerHTML = '<div class="empty">Chargez un profil</div>';
                 }
@@ -772,7 +902,7 @@ async function refreshProfilesList() {
             }
             const result = await window.electronAPI.profileLoad(id);
             if (!result?.success) return;
-            if (action === 'edit')    openEditProfileModal(result.profile);
+            if (action === 'edit') openEditProfileModal(result.profile);
             if (action === 'refresh') refreshProfile(id, type);
         });
     });
@@ -783,8 +913,23 @@ async function loadProfile(profileId) {
     if (!result?.success) throw new Error('Profil introuvable');
 
     const profile = result.profile;
-    state.currentProfileId   = profile.id;
-    state.stalkerSession     = profile.stalkerSession || null;
+    if (profile.settings?.pin) {
+
+        const entered =
+            prompt(
+                `PIN requis pour ${profile.name}`
+            );
+
+        if (
+            entered !== profile.settings.pin
+        ) {
+            throw new Error(
+                'PIN incorrect'
+            );
+        }
+    }
+    state.currentProfileId = profile.id;
+    state.stalkerSession = profile.stalkerSession || null;
     state.favoriteChannelIds = (profile.favoriteChannelIds || []).map(String);
     localStorage.setItem('lastProfileId', profile.id);
     document.body.classList.remove('on-welcome');
@@ -795,12 +940,12 @@ async function loadProfile(profileId) {
     if (pmInput) pmInput.value = profile.mac || '';
 
     const CACHE_MAX_AGE = 7 * 24 * 60 * 60 * 1000;
-    const cacheAge      = Date.now() - new Date(profile.updatedAt || 0).getTime();
-    const cacheValid    = profile.channels?.length && cacheAge < CACHE_MAX_AGE;
-    const cacheExpired  = profile.channels?.length && cacheAge >= CACHE_MAX_AGE;
+    const cacheAge = Date.now() - new Date(profile.updatedAt || 0).getTime();
+    const cacheValid = profile.channels?.length && cacheAge < CACHE_MAX_AGE;
+    const cacheExpired = profile.channels?.length && cacheAge >= CACHE_MAX_AGE;
 
     if (cacheValid) {
-        loadChannels(profile.channels, { autoPlay: false });
+        loadChannels(profile.channels, {autoPlay: false});
         setConnInfo(`📁 ${profile.name} (cache)`, profile.channels.length);
         toast('⚡ Chargement instantané');
         await refreshProfilesList();
@@ -811,33 +956,63 @@ async function loadProfile(profileId) {
 
     if (profile.type === 'stalker' && profile.portalUrl && profile.mac) {
         toast('⏳ Connexion au portail…');
-        const res = await window.electronAPI.stalkerConnect({ portalUrl: profile.portalUrl, mac: profile.mac });
+        const res = await window.electronAPI.stalkerConnect({portalUrl: profile.portalUrl, mac: profile.mac});
         if (!res.success) throw new Error(res.error || 'Connexion impossible');
 
-        state.stalkerSession = { token: res.token, serverBase: res.serverBase, mac: res.mac, stalkerHeaders: res.stalkerHeaders };
+        state.stalkerSession = {
+            token: res.token,
+            serverBase: res.serverBase,
+            mac: res.mac,
+            stalkerHeaders: res.stalkerHeaders
+        };
         const items = buildLibraryItems(res.channels, res.vod, res.series);
         loadChannels(items);
         setConnInfo(`📁 ${profile.name}`, items.length);
         toast(`✅ Profil chargé (${items.length} éléments)`);
     }
 
+    const color =
+        profile.settings?.accentColor;
+
+    if (color) {
+        applyAccentColor(color);
+
+        const picker =
+            $('cfg-accent');
+
+        if (picker)
+            picker.value = color;
+    }
+
+    const pinInput = $('cfg-pin');
+
+    if (pinInput) {
+        pinInput.value =
+            profile.settings?.pin || '';
+    }
+
     await refreshProfilesList();
 }
 
 async function reloadProfileLibrary(profile) {
-    const res = await window.electronAPI.stalkerConnect({ portalUrl: profile.portalUrl, mac: profile.mac });
+    const res = await window.electronAPI.stalkerConnect({portalUrl: profile.portalUrl, mac: profile.mac});
     if (!res.success) throw new Error(res.error || 'Recharge impossible');
-    const session = { token: res.token, serverBase: res.serverBase, mac: res.mac, stalkerHeaders: res.stalkerHeaders };
-    const items   = buildLibraryItems(res.channels, res.vod, res.series);
-    await window.electronAPI.profileUpdate({ id: profile.id, channels: items, stalkerSession: session, favoriteChannelIds: state.favoriteChannelIds });
-    return { session, items };
+    const session = {token: res.token, serverBase: res.serverBase, mac: res.mac, stalkerHeaders: res.stalkerHeaders};
+    const items = buildLibraryItems(res.channels, res.vod, res.series);
+    await window.electronAPI.profileUpdate({
+        id: profile.id,
+        channels: items,
+        stalkerSession: session,
+        favoriteChannelIds: state.favoriteChannelIds
+    });
+    return {session, items};
 }
 
 async function refreshProfile(profileId, type) {
     const result = await window.electronAPI.profileLoad(profileId);
     if (!result.success) return toast('❌ Profil introuvable');
 
-    const profile     = result.profile;
+    const profile = result.profile;
     const savedFavIds = (profile.favoriteChannelIds || []).map(String);
 
     if (type !== 'stalker' || !profile.portalUrl || !profile.mac)
@@ -846,11 +1021,11 @@ async function refreshProfile(profileId, type) {
     toast('🔄 Rafraîchissement en cours…');
     state.favoriteChannelIds = savedFavIds;
 
-    const refreshed = await reloadProfileLibrary(profile).catch((err) => ({ error: err }));
+    const refreshed = await reloadProfileLibrary(profile).catch((err) => ({error: err}));
     if (refreshed?.error) return toast(`❌ ${refreshed.error.message}`);
 
-    state.stalkerSession     = refreshed.session;
-    state.currentProfileId   = profileId;
+    state.stalkerSession = refreshed.session;
+    state.currentProfileId = profileId;
     state.favoriteChannelIds = savedFavIds;
     loadChannels(refreshed.items);
     setConnInfo(`📁 ${profile.name}`, refreshed.items.length);
@@ -859,7 +1034,7 @@ async function refreshProfile(profileId, type) {
 }
 
 async function renderWelcomeProfiles() {
-    const grid  = $('welcome-profiles-grid');
+    const grid = $('welcome-profiles-grid');
     const count = $('welcome-profiles-count');
     if (!grid || !count) return;
 
@@ -872,19 +1047,28 @@ async function renderWelcomeProfiles() {
     }
 
     const CACHE_MAX_AGE = 7 * 24 * 60 * 60 * 1000;
-    const now           = Date.now();
+    const now = Date.now();
 
     grid.innerHTML = profiles.map((p, i) => {
-        const cacheAge     = now - new Date(p.updatedAt || 0).getTime();
-        const hasCache     = p.channelCount > 0;
+        const cacheAge = now - new Date(p.updatedAt || 0).getTime();
+        const hasCache = p.channelCount > 0;
         const cacheExpired = hasCache && cacheAge >= CACHE_MAX_AGE;
-        const badge        = cacheExpired
+        const badge = cacheExpired
             ? `<div class="welcome-profile-badge badge-expired">Cache expiré</div>`
             : `<div class="welcome-profile-badge">Profil</div>`;
         return `
-    <button class="welcome-profile-card" data-profile-id="${p.id}" type="button">
-      <div class="welcome-profile-top">
-        <div class="welcome-profile-icon">📁</div>
+                <button class="welcome-profile-card" data-profile-id="${p.id}" type="button">
+                  <div class="welcome-profile-top">
+                    <div
+              class="welcome-profile-avatar"
+              style="background:${p.settings?.accentColor || '#6c5ce7'}"
+            >
+              ${(p.name || '?').charAt(0).toUpperCase()}
+            </div>
+            ${p.settings?.pin
+                        ? '<div class="welcome-profile-lock">🔒</div>'
+                        : ''
+                    }
         ${badge}
       </div>
       <div class="welcome-profile-name">${escHtml(p.name || `Profil ${i + 1}`)}</div>
@@ -912,11 +1096,13 @@ function setWelcomeCardLoading(card, loading) {
     const openEl = card.querySelector('.welcome-profile-open');
     const iconEl = card.querySelector('.welcome-profile-icon');
     if (loading) {
-        card.disabled = true; card.classList.add('loading');
+        card.disabled = true;
+        card.classList.add('loading');
         if (openEl) openEl.textContent = 'Connexion…';
         if (iconEl) iconEl.textContent = '⏳';
     } else {
-        card.disabled = false; card.classList.remove('loading');
+        card.disabled = false;
+        card.classList.remove('loading');
         if (openEl) openEl.textContent = 'Ouvrir ce profil →';
         if (iconEl) iconEl.textContent = '📁';
     }
@@ -926,11 +1112,13 @@ function goToWelcome() {
     if (state.currentChannel && !confirm('Quitter la lecture en cours ?')) return;
     destroyPlayer();
     state.currentChannel = null;
-    state.channels = []; state.filtered = [];
+    state.channels = [];
+    state.filtered = [];
     const cl = $('channel-list');
     if (cl) cl.innerHTML = '';
-    const nowName = $('now-name'); const nowGroup = $('now-group');
-    if (nowName)  nowName.textContent  = '—';
+    const nowName = $('now-name');
+    const nowGroup = $('now-group');
+    if (nowName) nowName.textContent = '—';
     if (nowGroup) nowGroup.textContent = '';
     $('conn-info')?.classList.add('hidden');
     $('welcome-screen')?.classList.remove('hidden');
@@ -940,10 +1128,12 @@ function goToWelcome() {
 
 function openEditProfileModal(profile) {
     state.renameProfileId = profile.id;
-    const nameEl = $('edit-name'); const urlEl = $('edit-url'); const macEl = $('edit-mac');
+    const nameEl = $('edit-name');
+    const urlEl = $('edit-url');
+    const macEl = $('edit-mac');
     if (nameEl) nameEl.value = profile.name || '';
-    if (urlEl)  urlEl.value  = profile.portalUrl || '';
-    if (macEl)  macEl.value  = profile.mac || '';
+    if (urlEl) urlEl.value = profile.portalUrl || '';
+    if (macEl) macEl.value = profile.mac || '';
     $('edit-profile-modal')?.classList.remove('hidden');
 }
 
@@ -951,8 +1141,15 @@ function openEditProfileModal(profile) {
 // PARAMÈTRES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function openSettings()  { $('settings-modal')?.classList.remove('hidden'); document.body.classList.add('settings-open'); }
-function closeSettings() { $('settings-modal')?.classList.add('hidden');    document.body.classList.remove('settings-open'); }
+function openSettings() {
+    $('settings-modal')?.classList.remove('hidden');
+    document.body.classList.add('settings-open');
+}
+
+function closeSettings() {
+    $('settings-modal')?.classList.add('hidden');
+    document.body.classList.remove('settings-open');
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // INITIALISATION & ÉVÉNEMENTS
@@ -965,12 +1162,15 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // ── Config ────────────────────────────────────────────────────────────────────
     state.config = await window.electronAPI.getConfig();
-    const set = (id, val) => { const el = $(id); if (el) el.value = val ?? ''; };
-    set('cfg-ua',       state.config.userAgent);
-    set('cfg-timeout',  state.config.networkTimeout ?? 60);
+    const set = (id, val) => {
+        const el = $(id);
+        if (el) el.value = val ?? '';
+    };
+    set('cfg-ua', state.config.userAgent);
+    set('cfg-timeout', state.config.networkTimeout ?? 60);
     set('cfg-referrer', state.config.referrer);
-    set('cfg-headers',  state.config.headerFields);
-    set('cfg-vlc',      state.config.vlcPath);
+    set('cfg-headers', state.config.headerFields);
+    set('cfg-vlc', state.config.vlcPath);
     const siUa = $('si-ua');
     if (siUa) siUa.textContent = state.config.userAgent || '';
 
@@ -984,10 +1184,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     // ── Fenêtre Electron ──────────────────────────────────────────────────────────
     $('btn-minimize')?.addEventListener('click', () => window.electronAPI.windowMinimize());
     $('btn-maximize')?.addEventListener('click', () => window.electronAPI.windowMaximize());
-    $('btn-close')?.addEventListener('click',    () => window.electronAPI.windowClose());
-    window.electronAPI.onWindowStateChanged(({ isMaximized }) => {
+    $('btn-close')?.addEventListener('click', () => window.electronAPI.windowClose());
+    window.electronAPI.onWindowStateChanged(({isMaximized}) => {
         const btn = $('btn-maximize');
-        if (btn) { btn.textContent = isMaximized ? '❐' : '☐'; btn.title = isMaximized ? 'Restaurer' : 'Agrandir'; }
+        if (btn) {
+            btn.textContent = isMaximized ? '❐' : '☐';
+            btn.title = isMaximized ? 'Restaurer' : 'Agrandir';
+        }
     });
     document.querySelector('.titlebar')?.addEventListener('dblclick', (e) => {
         if (!e.target.closest('.titlebar-right')) window.electronAPI.windowMaximize();
@@ -1032,10 +1235,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     // ── Modes ─────────────────────────────────────────────────────────────────────
-    const resetSeries = () => { state.seriesEpisodes = []; state.seriesStack = []; };
-    $('btn-mode-live')?.addEventListener('click',   () => { resetSeries(); setMode('live');   });
-    $('btn-mode-vod')?.addEventListener('click',    () => { resetSeries(); setMode('vod');    });
-    $('btn-mode-series')?.addEventListener('click', () => { resetSeries(); setMode('series'); });
+    const resetSeries = () => {
+        state.seriesEpisodes = [];
+        state.seriesStack = [];
+    };
+    $('btn-mode-live')?.addEventListener('click', () => {
+        resetSeries();
+        setMode('live');
+    });
+    $('btn-mode-vod')?.addEventListener('click', () => {
+        resetSeries();
+        setMode('vod');
+    });
+    $('btn-mode-series')?.addEventListener('click', () => {
+        resetSeries();
+        setMode('series');
+    });
     $('btn-series-back')?.addEventListener('click', () => {
         state.seriesEpisodes = state.seriesStack.pop() || [];
         setMode('series');
@@ -1059,22 +1274,33 @@ document.addEventListener('DOMContentLoaded', async () => {
         $('settings-modal')?.classList.contains('hidden') ? openSettings() : closeSettings()
     );
     $('close-settings')?.addEventListener('click', closeSettings);
-    $('settings-modal')?.addEventListener('click', (e) => { if (e.target === $('settings-modal')) closeSettings(); });
+    $('settings-modal')?.addEventListener('click', (e) => {
+        if (e.target === $('settings-modal')) closeSettings();
+    });
 
     $('save-settings')?.addEventListener('click', async () => {
         const color = $('cfg-accent')?.value || '#6c5ce7';
         applyAccentColor(color);
         localStorage.setItem('accentColor', color);
         const cfg = {
-            userAgent:      $('cfg-ua')?.value.trim()       || '',
+            userAgent: $('cfg-ua')?.value.trim() || '',
             networkTimeout: parseInt($('cfg-timeout')?.value) || 60,
-            referrer:       $('cfg-referrer')?.value.trim() || '',
-            headerFields:   $('cfg-headers')?.value.trim()  || '',
-            vlcPath:        $('cfg-vlc')?.value.trim()      || '',
+            referrer: $('cfg-referrer')?.value.trim() || '',
+            headerFields: $('cfg-headers')?.value.trim() || '',
+            vlcPath: $('cfg-vlc')?.value.trim() || '',
         };
         state.config = await window.electronAPI.updateConfig(cfg);
         const siUaEl = $('si-ua');
         if (siUaEl) siUaEl.textContent = cfg.userAgent;
+
+        const pin = $('cfg-pin')?.value.trim();
+
+        if (state.currentProfileId) {
+            await window.electronAPI.profileUpdate({
+                id: state.currentProfileId,
+                settings: { accentColor: color, pin }
+            });
+        }
         closeSettings();
         toast('✅ Paramètres sauvegardés');
     });
@@ -1085,8 +1311,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         const vlcInp = $('cfg-vlc');
         if (vlcInp) vlcInp.value = res.path;
         state.config = await window.electronAPI.updateConfig({
-            userAgent: $('cfg-ua')?.value.trim() || '', networkTimeout: parseInt($('cfg-timeout')?.value) || 60,
-            referrer: $('cfg-referrer')?.value.trim() || '', headerFields: $('cfg-headers')?.value.trim() || '', vlcPath: res.path,
+            userAgent: $('cfg-ua')?.value.trim() || '',
+            networkTimeout: parseInt($('cfg-timeout')?.value) || 60,
+            referrer: $('cfg-referrer')?.value.trim() || '',
+            headerFields: $('cfg-headers')?.value.trim() || '',
+            vlcPath: res.path,
         });
         toast('✅ Chemin VLC sauvegardé');
     });
@@ -1096,29 +1325,46 @@ document.addEventListener('DOMContentLoaded', async () => {
     // ── Stalker connect ───────────────────────────────────────────────────────────
     $('btn-connect')?.addEventListener('click', async () => {
         const portalUrl = $('portal-url')?.value.trim();
-        const mac       = $('portal-mac')?.value.trim();
-        if (!portalUrl || !mac)                                       return toast('⚠️ URL et MAC requis');
-        if (!/^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/.test(mac))     return toast('⚠️ Format MAC invalide');
+        const mac = $('portal-mac')?.value.trim();
+        if (!portalUrl || !mac) return toast('⚠️ URL et MAC requis');
+        if (!/^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/.test(mac)) return toast('⚠️ Format MAC invalide');
 
         const btn = $('btn-connect');
-        if (btn) { btn.disabled = true; btn.textContent = '⏳ Connexion…'; }
+        if (btn) {
+            btn.disabled = true;
+            btn.textContent = '⏳ Connexion…';
+        }
 
         try {
-            const res = await window.electronAPI.stalkerConnect({ portalUrl, mac });
-            if (!res.success) { toast(`❌ ${res.error}`); return; }
+            const res = await window.electronAPI.stalkerConnect({portalUrl, mac});
+            if (!res.success) {
+                toast(`❌ ${res.error}`);
+                return;
+            }
 
-            state.stalkerSession     = { token: res.token, serverBase: res.serverBase, mac: res.mac, stalkerHeaders: res.stalkerHeaders };
-            state.currentProfileId   = null;
+            state.stalkerSession = {
+                token: res.token,
+                serverBase: res.serverBase,
+                mac: res.mac,
+                stalkerHeaders: res.stalkerHeaders
+            };
+            state.currentProfileId = null;
             state.favoriteChannelIds = [];
-            state.saveContext        = 'stalker';
+            state.saveContext = 'stalker';
 
             const items = buildLibraryItems(res.channels, res.vod, res.series);
             loadChannels(items);
             setConnInfo('✅ Connecté', items.length);
             $('btn-save-profile')?.classList.remove('hidden');
             toast(`✅ ${res.channels.length} chaînes chargées`);
-        } catch (err) { toast(`❌ ${err.message}`); }
-        finally { if (btn) { btn.disabled = false; btn.textContent = '🔗 Connexion'; } }
+        } catch (err) {
+            toast(`❌ ${err.message}`);
+        } finally {
+            if (btn) {
+                btn.disabled = false;
+                btn.textContent = '🔗 Connexion';
+            }
+        }
     });
 
     // ── Save profile ──────────────────────────────────────────────────────────────
@@ -1136,7 +1382,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             name, channels: state.channels, favoriteChannelIds: state.favoriteChannelIds,
             type: 'stalker',
             portalUrl: state.saveContext === 'stalker' ? ($('portal-url')?.value.trim() || '') : '',
-            mac:       state.saveContext === 'stalker' ? ($('portal-mac')?.value.trim() || '') : '',
+            mac: state.saveContext === 'stalker' ? ($('portal-mac')?.value.trim() || '') : '',
             stalkerSession: state.saveContext === 'stalker' ? state.stalkerSession : null,
         });
         state.currentProfileId = result.id;
@@ -1153,12 +1399,15 @@ document.addEventListener('DOMContentLoaded', async () => {
         $('rename-profile-modal')?.classList.add('hidden');
     });
     $('rename-profile-input')?.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') { e.preventDefault(); $('confirm-rename-profile')?.click(); }
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            $('confirm-rename-profile')?.click();
+        }
     });
     $('confirm-rename-profile')?.addEventListener('click', async () => {
         const name = $('rename-profile-input')?.value.trim();
         if (!state.renameProfileId || !name) return toast('⚠️ Nom requis');
-        await window.electronAPI.profileRename({ id: state.renameProfileId, name });
+        await window.electronAPI.profileRename({id: state.renameProfileId, name});
         state.renameProfileId = null;
         const inp = $('rename-profile-input');
         if (inp) inp.value = '';
@@ -1171,15 +1420,25 @@ document.addEventListener('DOMContentLoaded', async () => {
     $('edit-profile-modal')?.addEventListener('click', (e) => {
         if (e.target.id === 'edit-profile-modal') $('edit-profile-modal')?.classList.add('hidden');
     });
-    $('copy-url')?.addEventListener('click', () => { navigator.clipboard.writeText($('edit-url')?.value || ''); toast('📋 URL copiée'); });
-    $('copy-mac')?.addEventListener('click', () => { navigator.clipboard.writeText($('edit-mac')?.value || ''); toast('📋 MAC copiée'); });
+    $('copy-url')?.addEventListener('click', () => {
+        navigator.clipboard.writeText($('edit-url')?.value || '');
+        toast('📋 URL copiée');
+    });
+    $('copy-mac')?.addEventListener('click', () => {
+        navigator.clipboard.writeText($('edit-mac')?.value || '');
+        toast('📋 MAC copiée');
+    });
     ['edit-url', 'edit-mac'].forEach((id) => {
-        $(id)?.addEventListener('click', function () { this.select(); navigator.clipboard.writeText(this.value); toast('📋 Copié'); });
+        $(id)?.addEventListener('click', function () {
+            this.select();
+            navigator.clipboard.writeText(this.value);
+            toast('📋 Copié');
+        });
     });
     $('confirm-edit-profile')?.addEventListener('click', async () => {
         const name = $('edit-name')?.value.trim();
         if (!name) return toast('⚠️ Nom requis');
-        await window.electronAPI.profileUpdate({ id: state.renameProfileId, name });
+        await window.electronAPI.profileUpdate({id: state.renameProfileId, name});
         $('edit-profile-modal')?.classList.add('hidden');
         await refreshProfilesList();
         await renderWelcomeProfiles();
@@ -1197,11 +1456,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     const video = $('video');
     if (video) video.volume = 0.8;
     const volSlider = $('vc-volume');
-    const volLabel  = $('vc-vol-label');
+    const volLabel = $('vc-vol-label');
     if (volSlider) volSlider.value = 80;
-    if (volLabel)  volLabel.textContent = '80%';
+    if (volLabel) volLabel.textContent = '80%';
 
-    $('vc-play')?.addEventListener('click', () => { const v = $('video'); v?.paused ? v.play() : v?.pause(); });
+    $('vc-play')?.addEventListener('click', () => {
+        const v = $('video');
+        v?.paused ? v.play() : v?.pause();
+    });
     $('vc-stop')?.addEventListener('click', () => {
         destroyPlayer();
         state.currentChannel = null;
@@ -1212,27 +1474,37 @@ document.addEventListener('DOMContentLoaded', async () => {
         $('loading-overlay')?.classList.add('hidden');
         $('video-controls')?.classList.add('hidden');
         $('live-dot')?.classList.remove('visible');
-        const nn = $('now-name');  if (nn) nn.textContent = '—';
-        const ng = $('now-group'); if (ng) ng.textContent = '';
+        const nn = $('now-name');
+        if (nn) nn.textContent = '—';
+        const ng = $('now-group');
+        if (ng) ng.textContent = '';
         renderChannels();
     });
     $('vc-prev')?.addEventListener('click', () => navigateChannel(-1));
     $('vc-next')?.addEventListener('click', () => navigateChannel(1));
     $('vc-mute')?.addEventListener('click', () => {
-        const v = $('video'); if (!v) return;
+        const v = $('video');
+        if (!v) return;
         v.muted = !v.muted;
         const btn = $('vc-mute');
         if (btn) btn.textContent = v.muted ? '🔇' : '🔊';
     });
     volSlider?.addEventListener('input', function () {
-        const v = $('video'); if (!v) return;
+        const v = $('video');
+        if (!v) return;
         const val = this.value / 100;
-        v.volume = val; v.muted = val === 0;
+        v.volume = val;
+        v.muted = val === 0;
         const mute = $('vc-mute');
         if (mute) mute.textContent = val === 0 ? '🔇' : val < 0.5 ? '🔉' : '🔊';
         if (volLabel) volLabel.textContent = `${this.value}%`;
     });
-    $('vc-reload')?.addEventListener('click', () => { if (state.currentChannel) { state.retryCount = 0; playChannel(state.currentChannel); } });
+    $('vc-reload')?.addEventListener('click', () => {
+        if (state.currentChannel) {
+            state.retryCount = 0;
+            playChannel(state.currentChannel);
+        }
+    });
     $('vc-vlc')?.addEventListener('click', playInVlc);
     $('vc-seek')?.addEventListener('input', () => {
         if (!isSeekableContent()) return;
@@ -1250,11 +1522,19 @@ document.addEventListener('DOMContentLoaded', async () => {
         state.isSeekDragging = false;
     });
     $('vc-pip')?.addEventListener('click', async () => {
-        try { document.pictureInPictureElement ? await document.exitPictureInPicture() : await $('video')?.requestPictureInPicture(); }
-        catch (_) { toast('❌ PiP non disponible'); }
+        try {
+            document.pictureInPictureElement ? await document.exitPictureInPicture() : await $('video')?.requestPictureInPicture();
+        } catch (_) {
+            toast('❌ PiP non disponible');
+        }
     });
     $('vc-fs')?.addEventListener('click', toggleFullscreen);
-    $('btn-retry')?.addEventListener('click', () => { if (state.currentChannel) { state.retryCount = 0; playChannel(state.currentChannel); } });
+    $('btn-retry')?.addEventListener('click', () => {
+        if (state.currentChannel) {
+            state.retryCount = 0;
+            playChannel(state.currentChannel);
+        }
+    });
 
     // Visibility on hover
     let controlsTimer;
@@ -1280,8 +1560,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     $('video-wrap')?.addEventListener('mousemove', showControls);
-    $('video-wrap')?.addEventListener('mouseleave', () => { if (!document.fullscreenElement) hideControlsSoon(1000); });
-    $('video-controls')?.addEventListener('mouseenter', () => { clearTimeout(controlsTimer); $('video-controls')?.classList.add('visible'); });
+    $('video-wrap')?.addEventListener('mouseleave', () => {
+        if (!document.fullscreenElement) hideControlsSoon(1000);
+    });
+    $('video-controls')?.addEventListener('mouseenter', () => {
+        clearTimeout(controlsTimer);
+        $('video-controls')?.classList.add('visible');
+    });
     $('video-controls')?.addEventListener('mouseleave', () => hideControlsSoon(2000));
 
     document.addEventListener('fullscreenchange', () => {
@@ -1299,43 +1584,110 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (video) {
         let bufferCheckTimer = null;
         video.addEventListener('canplaythrough', () => revealVideo());
-        video.addEventListener('canplay', () => { clearTimeout(bufferCheckTimer); bufferCheckTimer = setTimeout(revealVideo, 1500); });
-        video.addEventListener('timeupdate',     refreshSeekBar);
+        video.addEventListener('canplay', () => {
+            clearTimeout(bufferCheckTimer);
+            bufferCheckTimer = setTimeout(revealVideo, 1500);
+        });
+        video.addEventListener('timeupdate', refreshSeekBar);
         video.addEventListener('loadedmetadata', refreshSeekBar);
         video.addEventListener('durationchange', refreshSeekBar);
-        video.addEventListener('ended', () => { if (isSeekableContent()) { const s = $('vc-seek'); if (s) s.value = '1000'; refreshSeekBar(); } });
-        video.addEventListener('waiting', () => { if (video.style.opacity === '1') showLoading(); });
-        video.addEventListener('stalled', () => { if (video.style.opacity === '1') showLoading(); });
-        video.addEventListener('canplay',  () => { if (video.style.opacity === '1') hideLoading(); });
-        video.addEventListener('error',    () => { if (!state.player) { showError(getVideoError(video.error)); $('live-dot')?.classList.remove('visible'); } });
-        video.addEventListener('play',     () => { const b = $('vc-play'); if (b) b.textContent = '⏸'; });
-        video.addEventListener('pause',    () => { const b = $('vc-play'); if (b) b.textContent = '▶'; });
+        video.addEventListener('ended', () => {
+            if (isSeekableContent()) {
+                const s = $('vc-seek');
+                if (s) s.value = '1000';
+                refreshSeekBar();
+            }
+        });
+        video.addEventListener('waiting', () => {
+            if (video.style.opacity === '1') showLoading();
+        });
+        video.addEventListener('stalled', () => {
+            if (video.style.opacity === '1') showLoading();
+        });
+        video.addEventListener('canplay', () => {
+            if (video.style.opacity === '1') hideLoading();
+        });
+        video.addEventListener('error', () => {
+            if (!state.player) {
+                showError(getVideoError(video.error));
+                $('live-dot')?.classList.remove('visible');
+            }
+        });
+        video.addEventListener('play', () => {
+            const b = $('vc-play');
+            if (b) b.textContent = '⏸';
+        });
+        video.addEventListener('pause', () => {
+            const b = $('vc-play');
+            if (b) b.textContent = '▶';
+        });
         video.addEventListener('dblclick', toggleFullscreen);
     }
 
     // ── Raccourcis clavier ────────────────────────────────────────────────────────
     document.addEventListener('keydown', (e) => {
         if (e.target.tagName === 'INPUT') return;
-        if (e.key === '/') { e.preventDefault(); $('search')?.focus(); return; }
+        if (e.key === '/') {
+            e.preventDefault();
+            $('search')?.focus();
+            return;
+        }
         const v = $('video');
         switch (e.key) {
-            case ' ':           e.preventDefault(); v?.paused ? v.play() : v?.pause(); break;
-            case 'f': case 'F': toggleFullscreen(); break;
-            case 'm': case 'M': $('vc-mute')?.click(); break;
-            case 's': case 'S': $('btn-sidebar-toggle')?.click(); break;
-            case 'v': case 'V': playInVlc(); break;
-            case 'ArrowUp':     e.preventDefault(); navigateChannel(-1); break;
-            case 'ArrowDown':   e.preventDefault(); navigateChannel(1); break;
-            case 'ArrowLeft':   if (isSeekableContent() && v) { e.preventDefault(); v.currentTime = Math.max(0, v.currentTime - 10); } break;
-            case 'ArrowRight':  if (isSeekableContent() && v) { e.preventDefault(); v.currentTime = Math.min(v.duration || v.currentTime + 10, v.currentTime + 10); } break;
-            case 'Escape':      if (document.fullscreenElement) document.exitFullscreen(); break;
-            case 't': case 'T':
+            case ' ':
+                e.preventDefault();
+                v?.paused ? v.play() : v?.pause();
+                break;
+            case 'f':
+            case 'F':
+                toggleFullscreen();
+                break;
+            case 'm':
+            case 'M':
+                $('vc-mute')?.click();
+                break;
+            case 's':
+            case 'S':
+                $('btn-sidebar-toggle')?.click();
+                break;
+            case 'v':
+            case 'V':
+                playInVlc();
+                break;
+            case 'ArrowUp':
+                e.preventDefault();
+                navigateChannel(-1);
+                break;
+            case 'ArrowDown':
+                e.preventDefault();
+                navigateChannel(1);
+                break;
+            case 'ArrowLeft':
+                if (isSeekableContent() && v) {
+                    e.preventDefault();
+                    v.currentTime = Math.max(0, v.currentTime - 10);
+                }
+                break;
+            case 'ArrowRight':
+                if (isSeekableContent() && v) {
+                    e.preventDefault();
+                    v.currentTime = Math.min(v.duration || v.currentTime + 10, v.currentTime + 10);
+                }
+                break;
+            case 'Escape':
+                if (document.fullscreenElement) document.exitFullscreen();
+                break;
+            case 't':
+            case 'T':
                 const isTv = document.body.classList.toggle('tv-mode');
                 document.body.classList.toggle('sidebar-collapsed', isTv);
                 if (!isTv) $('sidebar-backdrop')?.classList.remove('hidden');
                 else $('sidebar-backdrop')?.classList.add('hidden');
                 break;
-            case 'h': case 'H': goToWelcome(); break;
+            case 'h':
+            case 'H':
+                goToWelcome();
+                break;
         }
     });
 
@@ -1350,6 +1702,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             await loadProfile(lastProfileId);
             $('welcome-screen')?.classList.add('hidden');
             document.body.classList.remove('on-welcome');
-        } catch (_) {}
+        } catch (_) {
+        }
     }
 });
