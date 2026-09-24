@@ -69,6 +69,13 @@
 
     /* Sidebar width — modifiable via JS au resize */
     --sidebar-width: 320px;
+
+    /* Hauteur de la barre de titre (+ encoche iPhone en mode app) */
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+    --safe-left: env(safe-area-inset-left, 0px);
+    --safe-right: env(safe-area-inset-right, 0px);
+    --titlebar-h: 38px;
 }
 
 *, *::before, *::after {
@@ -85,7 +92,9 @@ body {
             linear-gradient(135deg, #0b0b0f 0%, #13131a 45%, #1b1430 100%);
     color: var(--text);
     height: 100vh;
+    height: 100dvh;
     overflow: hidden;
+    -webkit-tap-highlight-color: transparent;
     display: flex;
     flex-direction: column;
 }
@@ -99,7 +108,7 @@ body {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    height: 38px;
+    height: var(--titlebar-h);
     padding: 0 12px;
     background: rgba(10, 10, 18, 0.72);
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
@@ -186,7 +195,7 @@ body.settings-open #btn-settings {
 
 .sidebar {
     position: fixed;
-    top: 38px;
+    top: var(--titlebar-h);
     left: 0;
     bottom: 0;
     width: var(--sidebar-width);
@@ -231,7 +240,7 @@ body.settings-open #btn-settings {
 
 .sidebar-backdrop {
     position: fixed;
-    inset: 38px 0 0 0;
+    inset: var(--titlebar-h) 0 0 0;
     background: rgba(0, 0, 0, 0.38);
     backdrop-filter: blur(3px);
     z-index: 50;
@@ -1505,4 +1514,391 @@ body.settings-open #btn-home {
     top:10px;
     right:10px;
     font-size:18px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   19. WEB / IPHONE
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Hors Electron : pas de boutons de fenêtre, pas de zone de déplacement */
+body.is-web .electron-only { display: none !important; }
+
+body.is-web .titlebar { -webkit-app-region: no-drag; }
+
+/* App écran d'accueil iOS (barre d'état translucide) : on descend sous l'encoche */
+body.is-standalone {
+    --titlebar-h: calc(44px + var(--safe-top));
+}
+
+body.is-standalone .titlebar {
+    padding-top: var(--safe-top);
+    padding-left: max(12px, var(--safe-left));
+    padding-right: max(12px, var(--safe-right));
+}
+
+.vc-btn.hidden,
+.tab-pane input.hidden,
+#m3u-file { display: none; }
+
+select {
+    width: 100%;
+    padding: 10px 12px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 12px;
+    color: var(--text);
+    font-size: 13px;
+    outline: none;
+}
+
+select option { background: #16161f; color: var(--text); }
+
+.form-divider {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 16px 0 10px;
+    font-size: 11px;
+    color: var(--text2);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.m3u-details > summary {
+    cursor: pointer;
+    list-style: none;
+}
+
+.m3u-details > summary::-webkit-details-marker { display: none; }
+.m3u-details > summary span::after { content: ' ▸'; }
+.m3u-details[open] > summary span::after { content: ' ▾'; }
+
+/* Le volet source ne doit jamais écraser la liste des chaînes */
+.tab-pane:not(.hidden) {
+    max-height: 42vh;
+    overflow-y: auto;
+}
+
+.channel-list { min-height: 120px; }
+
+.form-divider::before,
+.form-divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: rgba(255, 255, 255, 0.08);
+}
+
+/* Le PIN peut être demandé depuis l'écran d'accueil (z-index 9999) */
+#pin-modal { z-index: 10001; }
+
+/* ── Lecture bloquée par Safari : bouton ▶ ─────────────────────────────────── */
+.tap-to-play {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    z-index: 15;
+    width: 76px;
+    height: 76px;
+    transform: translate(-50%, -50%);
+    border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    color: #fff;
+    font-size: 30px;
+    cursor: pointer;
+    box-shadow: 0 16px 40px var(--accent-glow-strong);
+}
+
+.tap-to-play.hidden { display: none; }
+
+/* ── Paramètres ───────────────────────────────────────────────────────────── */
+.modal-settings {
+    width: 560px;
+    max-height: 90vh;
+    max-height: 90dvh;
+    overflow-y: auto;
+}
+
+.settings-section {
+    padding: 14px;
+    margin-bottom: 12px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 14px;
+}
+
+.settings-section h3 {
+    font-size: 13px;
+    margin-bottom: 12px;
+    color: var(--text);
+}
+
+.toggle-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+    font-size: 13px;
+    color: var(--text);
+    cursor: pointer;
+}
+
+.toggle-row input {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    accent-color: var(--accent);
+}
+
+.pair-block {
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+    margin-bottom: 12px;
+}
+
+.pair-block.disabled { opacity: 0.45; }
+
+.pair-qr {
+    width: 150px;
+    height: 150px;
+    flex-shrink: 0;
+    border-radius: 12px;
+    background: #fff;
+    padding: 6px;
+    image-rendering: pixelated;
+}
+
+.pair-qr.hidden { display: none; }
+
+.pair-details { flex: 1; min-width: 0; }
+
+.pair-hint {
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text2);
+    margin-bottom: 10px;
+}
+
+.pair-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--text2);
+}
+
+.pair-meta strong {
+    color: var(--accent2);
+    font-size: 15px;
+    letter-spacing: 0.12em;
+}
+
+.readonly-field button.hidden { display: none; }
+
+/* ── Écran d'appairage (iPhone sans code) ─────────────────────────────────── */
+.pair-screen {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: calc(24px + var(--safe-top)) 20px calc(24px + var(--safe-bottom));
+    background:
+            radial-gradient(circle at top, rgba(108, 92, 231, 0.22), transparent 35%),
+            linear-gradient(135deg, #0b0b0f 0%, #13131a 45%, #1b1430 100%);
+    overflow-y: auto;
+}
+
+.pair-screen.hidden { display: none; }
+
+.pair-card {
+    width: min(460px, 100%);
+    padding: 32px 24px;
+    text-align: center;
+    background: rgba(20, 20, 28, 0.72);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 24px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+}
+
+.pair-card h1 { font-size: 24px; margin-bottom: 12px; }
+.pair-card p  { font-size: 14px; color: #d8d8e6; line-height: 1.6; margin-bottom: 10px; }
+
+.pair-form {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 8px;
+}
+
+.pair-form input {
+    padding: 14px;
+    text-align: center;
+    font-size: 22px;
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 14px;
+    color: var(--text);
+    outline: none;
+}
+
+.pair-form input:focus { border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+
+.pair-error { color: var(--red) !important; font-size: 13px !important; margin-top: 10px; }
+.pair-error.hidden { display: none; }
+
+/* ── Mise en page mobile (iPhone portrait) ────────────────────────────────── */
+@media (max-width: 820px) {
+    .main { flex-direction: column; }
+
+    .player-area {
+        order: 1;
+        flex: 0 0 auto;
+        margin-left: 0 !important;
+    }
+
+    .video-wrap {
+        flex: none;
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        max-height: 45vh;
+        max-height: 45dvh;
+    }
+
+    .now-bar     { padding: 8px 12px; }
+    .stream-info { display: none !important; }
+
+    .sidebar {
+        position: static;
+        order: 2;
+        flex: 1;
+        min-height: 0;
+        width: 100% !important;
+        min-width: 0;
+        max-width: none;
+        transform: none !important;
+        border-right: none;
+        border-top: 1px solid rgba(255, 255, 255, 0.08);
+        box-shadow: none;
+        padding-bottom: var(--safe-bottom);
+    }
+
+    #sidebar-resizer,
+    .sidebar-backdrop { display: none !important; }
+
+    /* Sources (profils / portail) repliées : ☰ pour les afficher */
+    .source-tabs,
+    .tab-pane { display: none; }
+    body.sources-open .source-tabs { display: flex; }
+    body.sources-open .tab-pane:not(.hidden) {
+        display: block;
+        max-height: 50vh;
+        max-height: 50dvh;
+        overflow-y: auto;
+    }
+
+    /* Catégories en ruban horizontal */
+    .cat-header { display: none; }
+    .group-bar,
+    .group-bar.collapsed {
+        flex-direction: row;
+        max-height: none;
+        padding: 8px;
+        overflow-x: auto;
+        overflow-y: hidden;
+        scrollbar-width: none;
+    }
+    .group-bar::-webkit-scrollbar { display: none; }
+    .g-chip { flex-shrink: 0; gap: 8px; white-space: nowrap; }
+
+    .ch-item    { padding: 12px 10px; }
+    .ch-fav-btn { font-size: 22px; padding: 6px 8px; }
+
+    /* 16px minimum : évite le zoom automatique de Safari sur les champs */
+    .form-group input,
+    .search-wrap input,
+    select { font-size: 16px; }
+
+    .vc-center { display: none; }
+    .vc-row    { gap: 6px; }
+    .vc-btn    { width: 40px; height: 40px; }
+    .vc-left, .vc-right { gap: 4px; }
+
+    body.tv-mode .sidebar { display: none; }
+
+    .welcome-screen {
+        align-items: flex-start;
+        overflow-y: auto;
+        padding: calc(16px + var(--safe-top)) 12px calc(16px + var(--safe-bottom));
+    }
+    .welcome-content      { padding: 28px 18px; }
+    .welcome-content h1   { font-size: 28px; }
+    .welcome-content p    { font-size: 15px; }
+    .welcome-profiles-grid { grid-template-columns: 1fr; }
+
+    .modal { align-items: flex-end; }
+    .modal-content,
+    .modal-settings,
+    #edit-profile-modal .modal-content {
+        width: 100%;
+        max-width: 100%;
+        max-height: 92vh;
+        max-height: 92dvh;
+        overflow-y: auto;
+        border-radius: 22px 22px 0 0;
+        padding-bottom: calc(20px + var(--safe-bottom));
+    }
+
+    .pair-block { flex-direction: column; align-items: center; }
+    .pair-details { width: 100%; }
+
+    .toast {
+        bottom: calc(20px + var(--safe-bottom));
+        max-width: calc(100% - 24px);
+        text-align: center;
+    }
+
+    .profiles-list { max-height: none; }
+}
+
+/* ── iPhone en paysage : lecteur à gauche, liste à droite ─────────────────── */
+@media (pointer: coarse) and (max-height: 500px) and (orientation: landscape) {
+    .main { flex-direction: row; }
+
+    .player-area {
+        flex: 1 1 60%;
+        margin-left: 0 !important;
+        padding-left: var(--safe-left);
+    }
+
+    .video-wrap {
+        flex: 1;
+        aspect-ratio: auto;
+        max-height: none;
+    }
+
+    .sidebar {
+        position: static;
+        order: 2;
+        flex: 0 0 40%;
+        width: 40% !important;
+        min-width: 0;
+        transform: none !important;
+        padding-right: var(--safe-right);
+    }
+
+    .stream-info { display: none !important; }
+    .source-tabs, .tab-pane { display: none; }
+    body.sources-open .source-tabs { display: flex; }
+    body.sources-open .tab-pane:not(.hidden) { display: block; max-height: 60vh; overflow-y: auto; }
+    #sidebar-resizer, .sidebar-backdrop { display: none !important; }
+    .vc-center { display: none; }
+    body.tv-mode .sidebar { display: none; }
 }

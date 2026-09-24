@@ -5,6 +5,27 @@
 'use strict';
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// PLATEFORME
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Toutes les données passent par le serveur SMV (renderer/api.js) :
+// la même interface tourne dans Electron et dans Safari sur iPhone.
+const api = window.smvApi;
+const IS_ELECTRON = !!window.electronAPI?.isElectron;
+const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
+    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const IS_TOUCH = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+const IS_STANDALONE = window.matchMedia?.('(display-mode: standalone)').matches || navigator.standalone === true;
+const mobileLayout = window.matchMedia('(max-width: 820px), (pointer: coarse) and (max-height: 500px) and (orientation: landscape)');
+
+const PLAYBACK_MODE_KEY = 'smv_playback_mode';
+const RENDER_CHUNK = 150;
+
+function getPlaybackMode() {
+    return localStorage.getItem(PLAYBACK_MODE_KEY) || 'auto';
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // ÉTAT GLOBAL
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -28,6 +49,16 @@ const state = {
     saveContext: null,
     categoriesCollapsed: false,
     isSeekDragging: false,
+    playback: null,           // session de lecture côté serveur (proxy / HLS)
+    playEngine: null,         // moteur en cours : mpegts | hlsjs | native
+    playSource: null,         // direct (flux proxifié) | hls (transcodage serveur)
+    preferServerHls: false,   // le direct a échoué pour cette chaîne
+    attemptId: 0,
+    failCurrent: null,
+    streamUrl: '',            // URL amont complète du flux en cours
+    playToken: 0,             // annule les lectures devenues obsolètes (zapping rapide)
+    renderLimit: RENDER_CHUNK,
+    profileHasPin: false,
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -105,21 +136,6 @@ function debounce(fn, delay) {
 const HISTORY_MAX = 10;
 const HISTORY_KEY = 'smv_history';
 
-async function loadHistory() {
-    if (!state.currentProfileId) {
-        state.history = [];
-        return;
-    }
-
-    const res =
-        await window.electronAPI.profileLoad(
-            state.currentProfileId
-        );
-
-    state.history =
-        res.profile?.history || [];
-}
-
 async function addToHistory(ch) {
     // Dédupliquer — retirer si déjà présent
     state.history = state.history.filter((h) => getChannelKey(h) !== getChannelKey(ch));
@@ -136,9 +152,10 @@ async function addToHistory(ch) {
     // Limiter à HISTORY_MAX
     if (state.history.length > HISTORY_MAX) state.history = state.history.slice(0, HISTORY_MAX);
     if (state.currentProfileId) {
-        await window.electronAPI.profileUpdate({
+        api.profileUpdate({
             id: state.currentProfileId,
             history: state.history
+        }).catch(() => {
         });
     }
 
@@ -257,10 +274,10 @@ async function toggleFavorite(ch) {
         return;
     }
 
-    const res = await window.electronAPI.profileUpdate({
+    const res = await api.profileUpdate({
         id: state.currentProfileId,
         favoriteChannelIds: state.favoriteChannelIds,
-    });
+    }).catch(() => null);
     if (!res?.success) toast('❌ Impossible de sauvegarder les favoris');
 }
 
@@ -367,9 +384,38 @@ function getVideoError(err) {
     }[err.code] || err.message || 'Erreur inconnue';
 }
 
-function destroyPlayer() {
+function hideTapToPlay() {
+    $('tap-to-play')?.classList.add('hidden');
+}
+
+// Safari iOS refuse la lecture non déclenchée par un geste : bouton ▶ à toucher
+function showTapToPlay() {
+    hideLoading();
+    const video = $('video');
+    if (video) video.style.opacity = '1';
+    $('tap-to-play')?.classList.remove('hidden');
+}
+
+// Débloque l'élément vidéo pendant le geste utilisateur (les lectures suivantes,
+// lancées après des appels réseau, sont alors autorisées par Safari)
+function unlockVideo() {
+    const video = $('video');
+    if (!IS_TOUCH || !video || video.dataset.unlocked) return;
+    // Hors geste (lecture automatique) le déblocage ne compterait pas
+    if (navigator.userActivation && !navigator.userActivation.isActive) return;
+    video.dataset.unlocked = '1';
+    try {
+        video.play()?.catch?.(() => {
+        });
+    } catch (_) {
+    }
+}
+
+function teardownEngine() {
     resetQualityIndicator();
     updateProgressVisibility(false);
+    hideTapToPlay();
+    state.failCurrent = null;
     const seekBar = $('vc-seek');
     const currentTime = $('vc-current-time');
     const duration = $('vc-duration');
@@ -400,19 +446,92 @@ function destroyPlayer() {
         video.removeAttribute('src');
         video.load();
     }
+    state.playEngine = null;
 }
 
-function startPlayer(url, {isLive = true, preferHls = false} = {}) {
+function destroyPlayer() {
+    teardownEngine();
+    // Libère la connexion IPTV / le transcodage côté serveur
+    if (state.playback) {
+        api.stopPlayback(state.playback.id);
+        state.playback = null;
+    }
+}
+
+function nativeHlsSupported() {
+    return !!$('video')?.canPlayType('application/vnd.apple.mpegurl');
+}
+
+// iPhone : lecteur HLS natif (AirPlay, PiP, arrière-plan) ; ailleurs hls.js
+function hlsEngine() {
+    const canHlsJs = typeof Hls !== 'undefined' && Hls.isSupported();
+    if (IS_IOS && nativeHlsSupported()) return 'native';
+    return canHlsJs ? 'hlsjs' : 'native';
+}
+
+/**
+ * Choisit l'URL et le moteur selon le type de flux et l'appareil :
+ *   PC      → mpegts.js / hls.js / <video> sur le flux proxifié
+ *   iPhone  → HLS natif, transcodé par le serveur quand le format l'exige (TS, MKV…)
+ */
+function choosePlaybackPlan(pb) {
+    const mode = getPlaybackMode();
+    const canMpegts = typeof mpegts !== 'undefined' && mpegts.isSupported();
+    const serverHls = pb.hlsUrl ? {url: pb.hlsUrl, engine: hlsEngine(), source: 'hls'} : null;
+    const direct = (engine) => ({url: pb.streamUrl, engine, source: 'direct'});
+
+    if ((mode === 'hls' || state.preferServerHls) && mode !== 'direct' && serverHls) return serverHls;
+
+    switch (pb.kind) {
+        case 'hls':
+            return direct(hlsEngine());
+        case 'mp4':
+            return direct('native');
+        case 'mpegts':
+            if (mode !== 'direct' && IS_IOS && serverHls) return serverHls;
+            if (canMpegts) return direct('mpegts');
+            return serverHls || direct('native');
+        default:
+            if (mode !== 'direct' && IS_IOS && serverHls) return serverHls;
+            return direct('native');
+    }
+}
+
+function startPlayer(url, {isLive = true, engine = 'native'} = {}) {
     const video = $('video');
     if (!video) return;
+    // URL absolue : mpegts.js et hls.js chargent depuis un Worker (pas de base relative)
+    url = new URL(url, location.href).href;
 
+    const attempt = ++state.attemptId;
+    state.playEngine = engine;
     video.style.opacity = '0';
     showLoading();
     updateProgressVisibility(!isLive);
     resetQualityIndicator();
+    hideTapToPlay();
 
     let bufferReady = false;
     let bufferTimer = null;
+
+    // Une seule prise en charge d'échec par tentative (plusieurs événements d'erreur possibles)
+    const fail = () => {
+        if (attempt !== state.attemptId) return;
+        state.attemptId++;
+        clearTimeout(bufferTimer);
+        handlePlaybackFailure();
+    };
+    state.failCurrent = fail;
+
+    const onPlayRejected = (err) => {
+        if (attempt !== state.attemptId) return;
+        if (err?.name === 'NotAllowedError') {
+            showTapToPlay();
+            return;
+        }
+        if (err?.name === 'AbortError') return;
+        fail();
+    };
 
     function onBufferReady() {
         if (bufferReady) return;
@@ -426,10 +545,10 @@ function startPlayer(url, {isLive = true, preferHls = false} = {}) {
         }, isLive ? 5000 : 400);
     }
 
-    // mpegts (live) — on écoute aussi STATISTICS_INFO pour le bitrate
-    if (isLive && typeof mpegts !== 'undefined' && mpegts.isSupported()) {
+    // mpegts (flux TS) — on écoute aussi STATISTICS_INFO pour le bitrate
+    if (engine === 'mpegts') {
         state.player = mpegts.createPlayer(
-            {type: 'mpegts', url, isLive: true},
+            {type: 'mpegts', url, isLive},
             {
                 enableWorker: true,
                 liveBufferLatencyChasing: false,
@@ -444,34 +563,34 @@ function startPlayer(url, {isLive = true, preferHls = false} = {}) {
             if (info.decodedFrames > 0) onBufferReady();
             updateQualityIndicator(info);
         });
-        state.player.on(mpegts.Events.ERROR, () => {
-            clearTimeout(bufferTimer);
-            retryPlay();
+        state.player.on(mpegts.Events.ERROR, (type, details) => {
+            console.warn('[mpegts.js]', type, details);
+            fail();
         });
-        state.player.play();
+        const played = state.player.play();
+        played?.catch?.(onPlayRejected);
         return;
     }
 
     // HLS
-    if (preferHls && typeof Hls !== 'undefined' && Hls.isSupported()) {
+    if (engine === 'hlsjs') {
         state.hls = new Hls({enableWorker: true, lowLatencyMode: false});
         state.hls.loadSource(url);
         state.hls.attachMedia(video);
-        state.hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(retryPlay));
+        state.hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(onPlayRejected));
         state.hls.on(Hls.Events.ERROR, (_, data) => {
-            if (data?.fatal) {
-                clearTimeout(bufferTimer);
-                retryPlay();
-            }
+            if (!data?.fatal) return;
+            console.warn('[hls.js]', data.type, data.details, data.response?.code || '');
+            fail();
         });
         // Bitrate HLS via FRAG_CHANGED
-        state.hls.on(Hls.Events.FRAG_CHANGED, (_, data) => {
+        state.hls.on(Hls.Events.FRAG_CHANGED, () => {
             const bw = state.hls?.bandwidthEstimate;
             if (bw) updateQualityIndicator({speed: bw});
         });
     } else {
         video.src = url;
-        video.play().catch(retryPlay);
+        video.play().catch(onPlayRejected);
     }
 
     video.addEventListener('canplaythrough', function onReady() {
@@ -480,27 +599,52 @@ function startPlayer(url, {isLive = true, preferHls = false} = {}) {
     }, {once: true});
 }
 
+// Échec du moteur : on tente d'abord le transcodage HLS du serveur, puis on relance
+function handlePlaybackFailure() {
+    const pb = state.playback;
+    if (pb?.hlsUrl && state.playSource !== 'hls' && getPlaybackMode() !== 'direct') {
+        state.preferServerHls = true;
+        state.playSource = 'hls';
+        toast('🔁 Mode compatibilité : transcodage du flux…');
+        const isLive = !isSeekableContent();
+        teardownEngine();
+        startPlayer(pb.hlsUrl, {isLive, engine: hlsEngine()});
+        return;
+    }
+    retryPlay();
+}
+
 function retryPlay() {
     state.retryCount++;
     if (state.retryCount <= 3) {
+        const token = state.playToken;
         setTimeout(() => {
-            if (state.currentChannel) playChannel(state.currentChannel);
+            if (state.currentChannel && token === state.playToken) playChannel(state.currentChannel, {isRetry: true});
         }, 2000);
     } else {
         const video = $('video');
         if (video) video.style.opacity = '1';
-        showError('Impossible de lire le flux après 3 tentatives');
+        const hint = state.playback?.hlsUrl && state.config?.hlsVideoMode !== 'h264'
+            ? ' — essayez « Réencodage H.264 » dans Paramètres › Lecture'
+            : '';
+        showError(`Impossible de lire le flux après 3 tentatives${hint}`);
     }
 }
 
-async function playChannel(ch) {
+async function playChannel(ch, {isRetry = false} = {}) {
+    unlockVideo();
     destroyPlayer();
+    const token = ++state.playToken;
     state.currentChannel = ch;
-    state.retryCount = 0;
+    if (!isRetry) {
+        state.retryCount = 0;
+        state.preferServerHls = false;
+    }
     localStorage.setItem('lastChannelId', getChannelKey(ch));
 
-    // Ajouter à l'historique
-    await addToHistory(ch);
+    // Ajouter à l'historique (sans bloquer le démarrage du flux)
+    if (!isRetry) addToHistory(ch).catch(() => {
+    });
 
     const nowName = $('now-name');
     const nowGroup = $('now-group');
@@ -517,26 +661,29 @@ async function playChannel(ch) {
     $('channel-list')?.querySelector('.ch-item.playing')?.scrollIntoView({block: 'nearest', behavior: 'smooth'});
 
     let streamUrl = ch.cmd;
+    let headers = ch.headers || (state.stalkerSession?.stalkerHeaders ? JSON.parse(state.stalkerSession.stalkerHeaders) : {});
 
     if (state.stalkerSession && ch.cmd && !ch.cmd.startsWith('http')) {
         try {
-            const res = await window.electronAPI.stalkerGetStream({
+            const res = await api.stalkerGetStream({
                 serverBase: state.stalkerSession.serverBase, mac: state.stalkerSession.mac,
                 token: state.stalkerSession.token, cmd: ch.cmd,
                 stalkerHeadersJson: state.stalkerSession.stalkerHeaders,
                 contentType: ch.contentType, seriesIndex: ch.seriesIndex,
                 episodeId: ch.episodeId, containerExtension: ch.containerExtension,
             });
+            if (token !== state.playToken) return;
             if (!res.success) {
                 if (video) video.style.opacity = '1';
                 showError(res.error || 'Impossible de lire le flux');
                 return;
             }
             streamUrl = res.url;
+            if (res.headers) headers = res.headers;
             if (res.token && res.token !== state.stalkerSession.token) {
                 state.stalkerSession.token = res.token;
                 if (state.currentProfileId) {
-                    window.electronAPI.profileUpdate({
+                    api.profileUpdate({
                         id: state.currentProfileId,
                         stalkerSession: {...state.stalkerSession, token: res.token},
                     }).catch(() => {
@@ -544,6 +691,7 @@ async function playChannel(ch) {
                 }
             }
         } catch (err) {
+            if (token !== state.playToken) return;
             if (video) video.style.opacity = '1';
             showError(err.message);
             return;
@@ -556,33 +704,59 @@ async function playChannel(ch) {
         return;
     }
 
+    state.streamUrl = streamUrl;
     const siUrl = $('si-url');
     if (siUrl) siUrl.textContent = streamUrl.length > 60 ? streamUrl.slice(0, 60) + '…' : streamUrl;
     $('stream-info')?.classList.remove('hidden');
 
+    const isVodLike = ch.contentType === 'vod' || ch.contentType === 'series';
     try {
-        const headers = state.stalkerSession?.stalkerHeaders ? JSON.parse(state.stalkerSession.stalkerHeaders) : {};
-        const proxyResult = await window.electronAPI.proxySetTarget({url: streamUrl, headers});
-        const isVodLike = ch.contentType === 'vod' || ch.contentType === 'series';
-        startPlayer(proxyResult.proxyUrl, {isLive: !isVodLike, preferHls: /\.m3u8($|\?)/i.test(streamUrl)});
+        const pb = await api.createPlayback({url: streamUrl, headers, contentType: isVodLike ? ch.contentType : 'live'});
+        if (!pb?.success) throw new Error(pb?.error || 'Lecture impossible');
+        if (token !== state.playToken) {
+            api.stopPlayback(pb.id);
+            return;
+        }
+        state.playback = pb;
+        const plan = choosePlaybackPlan(pb);
+        state.playSource = plan.source;
+        startPlayer(plan.url, {isLive: !isVodLike, engine: plan.engine});
     } catch (err) {
+        if (token !== state.playToken) return;
         if (video) video.style.opacity = '1';
         showError(err.message);
     }
 }
 
-// Ouvrir dans VLC
+// Ouvrir dans VLC (PC : lance VLC ; iPhone : app VLC via x-callback)
 async function playInVlc() {
-    if (!state.currentChannel) return toast('⚠️ Aucune chaîne en cours de lecture');
-    const siUrlEl = $('si-url');
-    const url = siUrlEl?.textContent?.replace('…', '') || '';
-    if (!url || !url.startsWith('http')) return toast('⚠️ URL du flux introuvable');
+    if (!state.currentChannel || !state.playback) return toast('⚠️ Aucune chaîne en cours de lecture');
+    const url = new URL(state.playback.streamUrl, location.origin).href;
 
-    const res = await window.electronAPI.vlcPlay({url});
-    if (res?.success) {
-        toast('▶ Ouvert dans VLC');
-    } else {
-        toast(`${res?.error || 'VLC introuvable — configurez le chemin dans les paramètres'}`);
+    if (IS_ELECTRON) {
+        const res = await window.electronAPI.vlcPlay({url});
+        if (res?.success) {
+            toast('▶ Ouvert dans VLC');
+        } else {
+            toast(`${res?.error || 'VLC introuvable — configurez le chemin dans les paramètres'}`);
+        }
+        return;
+    }
+
+    $('video')?.pause();
+    if (IS_IOS) {
+        window.location.href = `vlc-x-callback://x-callback-url/stream?url=${encodeURIComponent(url)}`;
+        return;
+    }
+    if (/Android/i.test(navigator.userAgent)) {
+        window.location.href = `vlc://${url}`;
+        return;
+    }
+    try {
+        await navigator.clipboard.writeText(url);
+        toast('📋 Lien copié — VLC : Média → Ouvrir un flux réseau');
+    } catch (_) {
+        prompt('Lien du flux pour VLC', url);
     }
 }
 
@@ -593,12 +767,59 @@ function navigateChannel(dir) {
     playChannel(state.filtered[next]);
 }
 
+function isFullscreen() {
+    return !!(document.fullscreenElement || document.webkitFullscreenElement);
+}
+
 function toggleFullscreen() {
     const wrap = $('video-wrap');
-    if (!document.fullscreenElement) {
-        wrap?.requestFullscreen().catch(() => toast('❌ Plein écran non disponible'));
-    } else {
-        document.exitFullscreen();
+    const video = $('video');
+    if (isFullscreen()) {
+        (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
+        return;
+    }
+    const request = wrap?.requestFullscreen || wrap?.webkitRequestFullscreen;
+    if (request) {
+        try {
+            const res = request.call(wrap);
+            res?.catch?.(() => toast('❌ Plein écran non disponible'));
+        } catch (_) {
+            toast('❌ Plein écran non disponible');
+        }
+        return;
+    }
+    // iPhone : seul l'élément vidéo peut passer en plein écran (lecteur natif)
+    if (video?.webkitEnterFullscreen) {
+        try {
+            video.webkitEnterFullscreen();
+        } catch (_) {
+            toast('❌ Plein écran non disponible');
+        }
+        return;
+    }
+    toast('❌ Plein écran non disponible');
+}
+
+async function togglePip() {
+    const video = $('video');
+    if (!video) return;
+    try {
+        if (document.pictureInPictureElement) {
+            await document.exitPictureInPicture();
+            return;
+        }
+        if (document.pictureInPictureEnabled && video.requestPictureInPicture) {
+            await video.requestPictureInPicture();
+            return;
+        }
+        if (video.webkitSupportsPresentationMode?.('picture-in-picture')) {
+            const inPip = video.webkitPresentationMode === 'picture-in-picture';
+            video.webkitSetPresentationMode(inPip ? 'inline' : 'picture-in-picture');
+            return;
+        }
+        throw new Error('PiP');
+    } catch (_) {
+        toast('❌ PiP non disponible');
     }
 }
 
@@ -606,32 +827,18 @@ function toggleFullscreen() {
 // UI — RENDU CHAÎNES, GROUPES, MODES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function renderChannels() {
-    const channelList = $('channel-list');
-    if (!channelList) return;
+function buildChannelItem(ch, currentKey) {
+    const isPlaying = currentKey === getChannelKey(ch);
+    const isFav = isFavorite(ch);
 
-    const list = state.filtered;
+    const div = document.createElement('div');
+    div.className = ['ch-item', isPlaying && 'playing', isFav && 'favorite'].filter(Boolean).join(' ');
 
-    if (!list.length) {
-        channelList.innerHTML = `<div class="empty"><div class="empty-icon">🔍</div><p>Aucune chaîne trouvée</p></div>`;
-        return;
-    }
+    const logoHtml = ch.logo
+        ? `<img class="ch-logo" src="${escHtml(ch.logo)}" alt="" loading="lazy">`
+        : '<div class="ch-logo-placeholder">📺</div>';
 
-    const frag = document.createDocumentFragment();
-    const currentKey = getChannelKey(state.currentChannel);
-
-    for (const ch of list) {
-        const isPlaying = currentKey === getChannelKey(ch);
-        const isFav = isFavorite(ch);
-
-        const div = document.createElement('div');
-        div.className = ['ch-item', isPlaying && 'playing', isFav && 'favorite'].filter(Boolean).join(' ');
-
-        const logoHtml = ch.logo
-            ? `<img class="ch-logo" src="${escHtml(ch.logo)}" alt="" loading="lazy" onerror="this.outerHTML='<div class=\\'ch-logo-placeholder\\'>📺</div>'">`
-            : '<div class="ch-logo-placeholder">📺</div>';
-
-        div.innerHTML = `
+    div.innerHTML = `
       <span class="ch-num">${ch.number || ''}</span>
       ${logoHtml}
       <div class="ch-info">
@@ -640,29 +847,84 @@ function renderChannels() {
       </div>
       ${isPlaying ? '<span class="ch-play-icon">▶</span>' : ''}`;
 
-        div.addEventListener('click', () => {
-            if (state.currentMode === 'series' && ch.isSeries) {
-                openSeriesEpisodes(ch);
-                return;
-            }
-            playChannel(ch);
-        });
+    // Logo introuvable → pictogramme (pas de gestionnaire inline : CSP)
+    div.querySelector('.ch-logo')?.addEventListener('error', function () {
+        this.outerHTML = '<div class="ch-logo-placeholder">📺</div>';
+    }, {once: true});
 
-        const favBtn = document.createElement('button');
-        favBtn.className = `ch-fav-btn${isFav ? ' active' : ''}`;
-        favBtn.type = 'button';
-        favBtn.title = 'Favori';
-        favBtn.textContent = isFav ? '★' : '☆';
-        favBtn.addEventListener('click', async (e) => {
-            e.stopPropagation();
-            await toggleFavorite(ch);
-        });
-        div.appendChild(favBtn);
-        frag.appendChild(div);
+    div.addEventListener('click', () => {
+        if (state.currentMode === 'series' && ch.isSeries) {
+            openSeriesEpisodes(ch);
+            return;
+        }
+        playChannel(ch);
+    });
+
+    const favBtn = document.createElement('button');
+    favBtn.className = `ch-fav-btn${isFav ? ' active' : ''}`;
+    favBtn.type = 'button';
+    favBtn.title = 'Favori';
+    favBtn.textContent = isFav ? '★' : '☆';
+    favBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        await toggleFavorite(ch);
+    });
+    div.appendChild(favBtn);
+    return div;
+}
+
+// Rendu progressif : des milliers d'éléments d'un coup figeraient l'iPhone
+let sentinelObserver = null;
+
+function appendChannelItems(channelList, from) {
+    const list = state.filtered;
+    const currentKey = getChannelKey(state.currentChannel);
+    const frag = document.createDocumentFragment();
+    const to = Math.min(list.length, state.renderLimit);
+    for (let i = from; i < to; i++) frag.appendChild(buildChannelItem(list[i], currentKey));
+
+    channelList.querySelector('.virtual-sentinel')?.remove();
+    channelList.appendChild(frag);
+
+    sentinelObserver?.disconnect();
+    if (to < list.length) {
+        const sentinel = document.createElement('div');
+        sentinel.className = 'virtual-sentinel';
+        sentinel.textContent = `${to} / ${list.length} — faites défiler pour la suite`;
+        channelList.appendChild(sentinel);
+        sentinelObserver = new IntersectionObserver((entries) => {
+            if (!entries.some((e) => e.isIntersecting)) return;
+            const rendered = state.renderLimit;
+            state.renderLimit += RENDER_CHUNK * 2;
+            appendChannelItems(channelList, rendered);
+        }, {root: channelList, rootMargin: '800px 0px'});
+        sentinelObserver.observe(sentinel);
+    }
+}
+
+function renderChannels() {
+    const channelList = $('channel-list');
+    if (!channelList) return;
+
+    const list = state.filtered;
+    sentinelObserver?.disconnect();
+
+    if (!list.length) {
+        channelList.innerHTML = `<div class="empty"><div class="empty-icon">🔍</div><p>Aucune chaîne trouvée</p></div>`;
+        return;
     }
 
+    // L'élément en lecture doit être rendu pour pouvoir y défiler
+    const currentKey = getChannelKey(state.currentChannel);
+    const playingIdx = state.currentChannel ? list.findIndex((c) => getChannelKey(c) === currentKey) : -1;
+    if (playingIdx >= state.renderLimit) {
+        state.renderLimit = Math.ceil((playingIdx + 1) / RENDER_CHUNK) * RENDER_CHUNK;
+    }
+
+    const scrollTop = channelList.scrollTop;
     channelList.innerHTML = '';
-    channelList.appendChild(frag);
+    appendChannelItems(channelList, 0);
+    channelList.scrollTop = scrollTop;
 }
 
 function filterAndRender() {
@@ -701,6 +963,9 @@ function filterAndRender() {
     }
 
     state.filtered = list;
+    state.renderLimit = RENDER_CHUNK;
+    const channelList = $('channel-list');
+    if (channelList) channelList.scrollTop = 0;
     renderChannels();
 }
 
@@ -771,6 +1036,7 @@ function loadChannels(channels, {autoPlay = true} = {}) {
 
     syncFavoritesToChannels(channels);
     buildGroupBar(channels);
+    document.body.classList.remove('sources-open');
 
     const searchInp = $('search');
     if (searchInp) searchInp.value = '';
@@ -797,7 +1063,7 @@ async function openSeriesEpisodes(seriesItem) {
         return;
     }
     try {
-        const res = await window.electronAPI.stalkerSeriesEpisodes({
+        const res = await api.stalkerSeriesEpisodes({
             serverBase: state.stalkerSession.serverBase, mac: state.stalkerSession.mac,
             token: state.stalkerSession.token, seriesId: seriesItem.seriesId || seriesItem.id,
             stalkerHeadersJson: state.stalkerSession.stalkerHeaders,
@@ -827,7 +1093,7 @@ function setConnInfo(label, count) {
 }
 
 async function refreshProfilesList() {
-    const profiles = await window.electronAPI.profilesList();
+    const profiles = await api.profilesList();
     const container = $('profiles-list');
     if (!container) return;
 
@@ -841,12 +1107,12 @@ async function refreshProfilesList() {
     for (const p of profiles) {
         const item = document.createElement('div');
         item.className = `profile-item${state.currentProfileId === p.id ? ' playing' : ''}`;
-        const meta = p.type === 'stalker' ? `${p.portalUrl} · ${p.mac}` : 'Fichier M3U';
+        const meta = p.type === 'stalker' ? `${p.portalUrl} · ${p.mac}` : (p.m3uUrl ? 'Liste M3U (URL)' : 'Fichier M3U');
         const accent =
             p.settings?.accentColor || '#6c5ce7';
 
         const hasPin =
-            !!p.settings?.pin;
+            !!p.settings?.hasPin;
         const dateStr = new Date(p.updatedAt || p.createdAt).toLocaleDateString('fr-FR', {
             day: '2-digit',
             month: '2-digit',
@@ -858,7 +1124,7 @@ async function refreshProfilesList() {
          class="profile-avatar"
          style="background:${accent}"
         >
-         ${p.name.charAt(0).toUpperCase()}
+         ${escHtml(p.name.charAt(0).toUpperCase())}
         </div>
         ${hasPin
             ? '<span class="profile-pin">🔒 Protégé</span>'
@@ -890,7 +1156,7 @@ async function refreshProfilesList() {
             const {action, id, type} = btn.dataset;
             if (action === 'delete') {
                 if (!confirm('Supprimer ce profil ?')) return;
-                await window.electronAPI.profileDelete(id);
+                await api.profileDelete(id);
                 if (state.currentProfileId === id) {
                     state.currentProfileId = null;
                     state.channels = [];
@@ -900,51 +1166,122 @@ async function refreshProfilesList() {
                 await refreshProfilesList();
                 return toast('🗑️ Profil supprimé');
             }
-            const result = await window.electronAPI.profileLoad(id);
+            const result = await openProfileWithPin(id).catch((err) => {
+                toast(`❌ ${err.message}`);
+                return null;
+            });
             if (!result?.success) return;
             if (action === 'edit') openEditProfileModal(result.profile);
-            if (action === 'refresh') refreshProfile(id, type);
+            if (action === 'refresh') refreshProfile(result.profile, type);
         });
     });
 }
 
-async function loadProfile(profileId) {
-    const result = await window.electronAPI.profileLoad(profileId);
-    if (!result?.success) throw new Error('Profil introuvable');
-
-    const profile = result.profile;
-    if (profile.settings?.pin) {
-
-        const entered =
-            prompt(
-                `PIN requis pour ${profile.name}`
-            );
-
-        if (
-            entered !== profile.settings.pin
-        ) {
-            throw new Error(
-                'PIN incorrect'
-            );
+// Saisie du PIN (window.prompt n'existe pas dans Electron)
+function askPin(profileName) {
+    return new Promise((resolve) => {
+        const modal = $('pin-modal');
+        const form = $('pin-form');
+        const input = $('pin-input');
+        const closeBtn = $('close-pin');
+        if (!modal || !form || !input) {
+            resolve(null);
+            return;
         }
+        const label = $('pin-label');
+        if (label) label.textContent = profileName ? `PIN requis pour « ${profileName} »` : 'PIN requis pour ce profil';
+        input.value = '';
+        modal.classList.remove('hidden');
+        setTimeout(() => input.focus(), 50);
+
+        const close = (value) => {
+            modal.classList.add('hidden');
+            form.removeEventListener('submit', onSubmit);
+            closeBtn?.removeEventListener('click', onCancel);
+            resolve(value);
+        };
+        const onSubmit = (e) => {
+            e.preventDefault();
+            close(input.value);
+        };
+        const onCancel = () => close(null);
+        form.addEventListener('submit', onSubmit);
+        closeBtn?.addEventListener('click', onCancel);
+    });
+}
+
+// Demande le PIN parental si besoin — la vérification est faite par le serveur
+async function openProfileWithPin(profileId) {
+    let result = await api.profileLoad(profileId);
+    if (result?.pinRequired) {
+        const entered = await askPin(result.name);
+        if (entered === null) throw new Error('PIN requis');
+        result = await api.profileLoad(profileId, entered);
+        if (result?.pinRequired) throw new Error('PIN incorrect');
     }
+    if (!result?.success) throw new Error(result?.error || 'Profil introuvable');
+    return result;
+}
+
+function applyProfileSettings(profile) {
+    const color = profile.settings?.accentColor;
+    if (color) {
+        applyAccentColor(color);
+        const picker = $('cfg-accent');
+        if (picker) picker.value = color;
+    }
+    state.profileHasPin = !!profile.settings?.hasPin;
+    const pinInput = $('cfg-pin');
+    if (pinInput) {
+        pinInput.value = '';
+        pinInput.placeholder = state.profileHasPin ? 'PIN défini — laisser vide pour le conserver' : 'PIN parental';
+    }
+    $('btn-remove-pin')?.classList.toggle('hidden', !state.profileHasPin);
+}
+
+async function fetchLibrary(profile, onProgress) {
+    if (profile.type === 'm3u') {
+        if (!profile.m3uUrl) throw new Error('Rechargez le fichier M3U manuellement');
+        const res = await api.m3uFetch(profile.m3uUrl, onProgress);
+        if (!res?.success) throw new Error(res?.error || 'Liste M3U inaccessible');
+        return {session: null, items: buildLibraryItems(res.channels, res.vod, res.series)};
+    }
+    const res = await api.stalkerConnect({portalUrl: profile.portalUrl, mac: profile.mac}, onProgress);
+    if (!res?.success) throw new Error(res?.error || 'Connexion impossible');
+    const session = {token: res.token, serverBase: res.serverBase, mac: res.mac, stalkerHeaders: res.stalkerHeaders};
+    return {session, items: buildLibraryItems(res.channels, res.vod, res.series)};
+}
+
+const progressToast = (p) => toast(`⏳ ${p?.message || 'Chargement…'}`, 60000);
+
+async function loadProfile(profileId) {
+    const result = await openProfileWithPin(profileId);
+    const profile = result.profile;
+
     state.currentProfileId = profile.id;
     state.stalkerSession = profile.stalkerSession || null;
     state.favoriteChannelIds = (profile.favoriteChannelIds || []).map(String);
+    state.history = Array.isArray(profile.history) ? profile.history : [];
     localStorage.setItem('lastProfileId', profile.id);
     document.body.classList.remove('on-welcome');
+    applyProfileSettings(profile);
 
     const puInput = $('portal-url');
     const pmInput = $('portal-mac');
+    const m3uInput = $('m3u-url');
     if (puInput) puInput.value = profile.portalUrl || '';
     if (pmInput) pmInput.value = profile.mac || '';
+    if (m3uInput) m3uInput.value = profile.m3uUrl || '';
+    if (profile.m3uUrl) $('m3u-details')?.setAttribute('open', '');
 
     const CACHE_MAX_AGE = 7 * 24 * 60 * 60 * 1000;
     const cacheAge = Date.now() - new Date(profile.updatedAt || 0).getTime();
     const cacheValid = profile.channels?.length && cacheAge < CACHE_MAX_AGE;
     const cacheExpired = profile.channels?.length && cacheAge >= CACHE_MAX_AGE;
+    const canReload = (profile.type === 'stalker' && profile.portalUrl && profile.mac)
+        || (profile.type === 'm3u' && profile.m3uUrl);
 
-    if (cacheValid) {
+    if (cacheValid || (profile.channels?.length && !canReload)) {
         loadChannels(profile.channels, {autoPlay: false});
         setConnInfo(`📁 ${profile.name} (cache)`, profile.channels.length);
         toast('⚡ Chargement instantané');
@@ -954,79 +1291,52 @@ async function loadProfile(profileId) {
 
     if (cacheExpired) toast('⚠️ Cache expiré, reconnexion…');
 
-    if (profile.type === 'stalker' && profile.portalUrl && profile.mac) {
-        toast('⏳ Connexion au portail…');
-        const res = await window.electronAPI.stalkerConnect({portalUrl: profile.portalUrl, mac: profile.mac});
-        if (!res.success) throw new Error(res.error || 'Connexion impossible');
-
-        state.stalkerSession = {
-            token: res.token,
-            serverBase: res.serverBase,
-            mac: res.mac,
-            stalkerHeaders: res.stalkerHeaders
-        };
-        const items = buildLibraryItems(res.channels, res.vod, res.series);
+    if (canReload) {
+        toast(profile.type === 'm3u' ? '⏳ Téléchargement de la liste…' : '⏳ Connexion au portail…', 60000);
+        const {session, items} = await fetchLibrary(profile, progressToast);
+        state.stalkerSession = session;
         loadChannels(items);
         setConnInfo(`📁 ${profile.name}`, items.length);
         toast(`✅ Profil chargé (${items.length} éléments)`);
-    }
-
-    const color =
-        profile.settings?.accentColor;
-
-    if (color) {
-        applyAccentColor(color);
-
-        const picker =
-            $('cfg-accent');
-
-        if (picker)
-            picker.value = color;
-    }
-
-    const pinInput = $('cfg-pin');
-
-    if (pinInput) {
-        pinInput.value =
-            profile.settings?.pin || '';
+        api.profileUpdate({
+            id: profile.id,
+            channels: items,
+            ...(session ? {stalkerSession: session} : {}),
+            favoriteChannelIds: state.favoriteChannelIds,
+        }).catch(() => {
+        });
     }
 
     await refreshProfilesList();
 }
 
-async function reloadProfileLibrary(profile) {
-    const res = await window.electronAPI.stalkerConnect({portalUrl: profile.portalUrl, mac: profile.mac});
-    if (!res.success) throw new Error(res.error || 'Recharge impossible');
-    const session = {token: res.token, serverBase: res.serverBase, mac: res.mac, stalkerHeaders: res.stalkerHeaders};
-    const items = buildLibraryItems(res.channels, res.vod, res.series);
-    await window.electronAPI.profileUpdate({
-        id: profile.id,
-        channels: items,
-        stalkerSession: session,
-        favoriteChannelIds: state.favoriteChannelIds
-    });
-    return {session, items};
-}
-
-async function refreshProfile(profileId, type) {
-    const result = await window.electronAPI.profileLoad(profileId);
-    if (!result.success) return toast('❌ Profil introuvable');
-
-    const profile = result.profile;
+async function refreshProfile(profile, type) {
     const savedFavIds = (profile.favoriteChannelIds || []).map(String);
 
-    if (type !== 'stalker' || !profile.portalUrl || !profile.mac)
+    if (type === 'stalker' ? !profile.portalUrl || !profile.mac : !profile.m3uUrl)
         return toast('ℹ️ Rechargez le fichier M3U manuellement');
 
-    toast('🔄 Rafraîchissement en cours…');
+    toast('🔄 Rafraîchissement en cours…', 60000);
     state.favoriteChannelIds = savedFavIds;
 
-    const refreshed = await reloadProfileLibrary(profile).catch((err) => ({error: err}));
-    if (refreshed?.error) return toast(`❌ ${refreshed.error.message}`);
+    let refreshed;
+    try {
+        refreshed = await fetchLibrary(profile, progressToast);
+        await api.profileUpdate({
+            id: profile.id,
+            channels: refreshed.items,
+            ...(refreshed.session ? {stalkerSession: refreshed.session} : {}),
+            favoriteChannelIds: state.favoriteChannelIds,
+        });
+    } catch (err) {
+        return toast(`❌ ${err.message}`);
+    }
 
     state.stalkerSession = refreshed.session;
-    state.currentProfileId = profileId;
+    state.currentProfileId = profile.id;
     state.favoriteChannelIds = savedFavIds;
+    state.history = Array.isArray(profile.history) ? profile.history : state.history;
+    applyProfileSettings(profile);
     loadChannels(refreshed.items);
     setConnInfo(`📁 ${profile.name}`, refreshed.items.length);
     toast(`✅ Cache mis à jour (${refreshed.items.length} éléments)`);
@@ -1038,7 +1348,7 @@ async function renderWelcomeProfiles() {
     const count = $('welcome-profiles-count');
     if (!grid || !count) return;
 
-    const profiles = await window.electronAPI.profilesList();
+    const profiles = await api.profilesList();
     count.textContent = String(profiles.length);
 
     if (!profiles.length) {
@@ -1063,17 +1373,17 @@ async function renderWelcomeProfiles() {
               class="welcome-profile-avatar"
               style="background:${p.settings?.accentColor || '#6c5ce7'}"
             >
-              ${(p.name || '?').charAt(0).toUpperCase()}
+              ${escHtml((p.name || '?').charAt(0).toUpperCase())}
             </div>
-            ${p.settings?.pin
+            ${p.settings?.hasPin
                         ? '<div class="welcome-profile-lock">🔒</div>'
                         : ''
                     }
         ${badge}
       </div>
       <div class="welcome-profile-name">${escHtml(p.name || `Profil ${i + 1}`)}</div>
-      <div class="welcome-profile-meta">${escHtml(p.portalUrl || 'Portail non défini')}</div>
-      <div class="welcome-profile-submeta">${escHtml(p.mac || 'MAC non définie')}</div>
+      <div class="welcome-profile-meta">${escHtml(p.type === 'm3u' ? 'Liste M3U' : (p.portalUrl || 'Portail non défini'))}</div>
+      <div class="welcome-profile-submeta">${escHtml(p.type === 'm3u' ? (p.m3uUrl || 'Fichier importé') : (p.mac || 'MAC non définie'))}</div>
       <div class="welcome-profile-open">Ouvrir ce profil →</div>
     </button>`;
     }).join('');
@@ -1141,9 +1451,61 @@ function openEditProfileModal(profile) {
 // PARAMÈTRES
 // ═══════════════════════════════════════════════════════════════════════════════
 
+function setFieldValue(id, val) {
+    const el = $(id);
+    if (el) el.value = val ?? '';
+}
+
+function fillConfigForm(cfg = {}) {
+    setFieldValue('cfg-ua', cfg.userAgent);
+    setFieldValue('cfg-timeout', cfg.networkTimeout ?? 60);
+    setFieldValue('cfg-referrer', cfg.referrer);
+    setFieldValue('cfg-headers', cfg.headerFields);
+    setFieldValue('cfg-vlc', cfg.vlcPath);
+    setFieldValue('cfg-ffmpeg', cfg.ffmpegPath);
+    setFieldValue('cfg-hls-video', cfg.hlsVideoMode || 'copy');
+    setFieldValue('cfg-playback-mode', getPlaybackMode());
+    const remote = $('cfg-remote');
+    if (remote) remote.checked = !!cfg.remoteAccess;
+    const tray = $('cfg-tray');
+    if (tray) tray.checked = !!cfg.keepRunningInTray;
+}
+
+// QR code + adresse à ouvrir sur l'iPhone
+async function refreshPairingInfo() {
+    const qr = $('pair-qr');
+    const urlInput = $('pair-url');
+    const keyEl = $('pair-key');
+    const ffmpegEl = $('pair-ffmpeg');
+    try {
+        const info = await api.serverInfo();
+        const first = info.urls?.[0];
+        if (qr) {
+            qr.classList.toggle('hidden', !first?.qr);
+            if (first?.qr) qr.src = first.qr;
+        }
+        if (urlInput) {
+            urlInput.value = first?.url
+                || (info.remoteAccess ? 'Aucun réseau local détecté' : 'Accès réseau désactivé');
+            urlInput.title = (info.urls || []).map((u) => `${u.name} : ${u.url}`).join('\n');
+        }
+        if (keyEl) keyEl.textContent = info.accessKey || '—';
+        if (ffmpegEl) {
+            ffmpegEl.textContent = info.ffmpeg
+                ? '✅ Transcodage iPhone disponible (ffmpeg)'
+                : '⚠️ ffmpeg introuvable : les flux TS/MKV ne seront pas lisibles sur iPhone';
+        }
+        $('pair-block')?.classList.toggle('disabled', !info.remoteAccess);
+    } catch (err) {
+        if (urlInput) urlInput.value = err.message;
+    }
+}
+
 function openSettings() {
+    fillConfigForm(state.config);
     $('settings-modal')?.classList.remove('hidden');
     document.body.classList.add('settings-open');
+    refreshPairingInfo();
 }
 
 function closeSettings() {
@@ -1152,25 +1514,82 @@ function closeSettings() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// APPAIRAGE (iPhone sans clé d'accès)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function showPairScreen() {
+    destroyPlayer();
+    $('welcome-screen')?.classList.add('hidden');
+    $('pair-screen')?.classList.remove('hidden');
+    setTimeout(() => $('pair-code')?.focus(), 100);
+}
+
+function setupPairScreen() {
+    $('pair-form')?.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const code = ($('pair-code')?.value || '').trim().toUpperCase();
+        if (!code) return;
+        api.setAccessKey(code);
+        if (await api.checkAuth()) {
+            // Recharge avec ?key= : l'app ajoutée à l'écran d'accueil démarrera authentifiée
+            location.replace(`/?key=${encodeURIComponent(code)}`);
+            return;
+        }
+        $('pair-error')?.classList.remove('hidden');
+    });
+    window.addEventListener('smv:unauthorized', showPairScreen);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SOURCES M3U
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function loadM3uResult(res, {m3uUrl = ''} = {}) {
+    if (!res?.success) {
+        toast(`❌ ${res?.error || 'Liste M3U invalide'}`);
+        return;
+    }
+    const items = buildLibraryItems(res.channels, res.vod, res.series);
+    if (!items.length) {
+        toast('⚠️ Aucune chaîne trouvée dans la liste');
+        return;
+    }
+    state.stalkerSession = null;
+    state.currentProfileId = null;
+    state.favoriteChannelIds = [];
+    state.history = [];
+    state.saveContext = 'm3u';
+    state.saveM3uUrl = m3uUrl;
+    loadChannels(items);
+    setConnInfo('✅ Liste M3U', items.length);
+    $('btn-save-profile')?.classList.remove('hidden');
+    toast(`✅ ${items.length} éléments chargés`);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // INITIALISATION & ÉVÉNEMENTS
 // ═══════════════════════════════════════════════════════════════════════════════
 
 document.addEventListener('DOMContentLoaded', async () => {
 
-    // ── Historique ────────────────────────────────────────────────────────────────
-    loadHistory();
+    // ── Plateforme ───────────────────────────────────────────────────────────────
+    const bodyCls = document.body.classList;
+    bodyCls.toggle('is-electron', IS_ELECTRON);
+    bodyCls.toggle('is-web', !IS_ELECTRON);
+    bodyCls.toggle('is-ios', IS_IOS);
+    bodyCls.toggle('is-touch', IS_TOUCH);
+    bodyCls.toggle('is-standalone', IS_STANDALONE);
+
+    // ── Accès au serveur ─────────────────────────────────────────────────────────
+    setupPairScreen();
+    if (!(await api.checkAuth())) {
+        showPairScreen();
+        return;
+    }
 
     // ── Config ────────────────────────────────────────────────────────────────────
-    state.config = await window.electronAPI.getConfig();
-    const set = (id, val) => {
-        const el = $(id);
-        if (el) el.value = val ?? '';
-    };
-    set('cfg-ua', state.config.userAgent);
-    set('cfg-timeout', state.config.networkTimeout ?? 60);
-    set('cfg-referrer', state.config.referrer);
-    set('cfg-headers', state.config.headerFields);
-    set('cfg-vlc', state.config.vlcPath);
+    state.config = await api.getConfig();
+    fillConfigForm(state.config);
     const siUa = $('si-ua');
     if (siUa) siUa.textContent = state.config.userAgent || '';
 
@@ -1182,23 +1601,30 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     // ── Fenêtre Electron ──────────────────────────────────────────────────────────
-    $('btn-minimize')?.addEventListener('click', () => window.electronAPI.windowMinimize());
-    $('btn-maximize')?.addEventListener('click', () => window.electronAPI.windowMaximize());
-    $('btn-close')?.addEventListener('click', () => window.electronAPI.windowClose());
-    window.electronAPI.onWindowStateChanged(({isMaximized}) => {
-        const btn = $('btn-maximize');
-        if (btn) {
-            btn.textContent = isMaximized ? '❐' : '☐';
-            btn.title = isMaximized ? 'Restaurer' : 'Agrandir';
-        }
-    });
-    document.querySelector('.titlebar')?.addEventListener('dblclick', (e) => {
-        if (!e.target.closest('.titlebar-right')) window.electronAPI.windowMaximize();
-    });
+    if (IS_ELECTRON) {
+        $('btn-minimize')?.addEventListener('click', () => window.electronAPI.windowMinimize());
+        $('btn-maximize')?.addEventListener('click', () => window.electronAPI.windowMaximize());
+        $('btn-close')?.addEventListener('click', () => window.electronAPI.windowClose());
+        window.electronAPI.onWindowStateChanged(({isMaximized}) => {
+            const btn = $('btn-maximize');
+            if (btn) {
+                btn.textContent = isMaximized ? '❐' : '☐';
+                btn.title = isMaximized ? 'Restaurer' : 'Agrandir';
+            }
+        });
+        document.querySelector('.titlebar')?.addEventListener('dblclick', (e) => {
+            if (!e.target.closest('.titlebar-right')) window.electronAPI.windowMaximize();
+        });
+    }
 
     // ── Sidebar ───────────────────────────────────────────────────────────────────
     const backdrop = $('sidebar-backdrop');
     $('btn-sidebar-toggle')?.addEventListener('click', () => {
+        // Mobile : la liste reste sous le lecteur, ☰ affiche/masque les sources
+        if (mobileLayout.matches) {
+            bodyCls.toggle('sources-open');
+            return;
+        }
         const collapsed = document.body.classList.contains('sidebar-collapsed');
         document.body.classList.toggle('sidebar-collapsed', !collapsed);
         document.body.classList.toggle('tv-mode', false);
@@ -1282,45 +1708,83 @@ document.addEventListener('DOMContentLoaded', async () => {
         const color = $('cfg-accent')?.value || '#6c5ce7';
         applyAccentColor(color);
         localStorage.setItem('accentColor', color);
+        localStorage.setItem(PLAYBACK_MODE_KEY, $('cfg-playback-mode')?.value || 'auto');
+
         const cfg = {
             userAgent: $('cfg-ua')?.value.trim() || '',
             networkTimeout: parseInt($('cfg-timeout')?.value) || 60,
             referrer: $('cfg-referrer')?.value.trim() || '',
             headerFields: $('cfg-headers')?.value.trim() || '',
-            vlcPath: $('cfg-vlc')?.value.trim() || '',
+            hlsVideoMode: $('cfg-hls-video')?.value || 'copy',
+            remoteAccess: !!$('cfg-remote')?.checked,
         };
-        state.config = await window.electronAPI.updateConfig(cfg);
+        if (IS_ELECTRON) {
+            cfg.vlcPath = $('cfg-vlc')?.value.trim() || '';
+            cfg.ffmpegPath = $('cfg-ffmpeg')?.value.trim() || '';
+            cfg.keepRunningInTray = !!$('cfg-tray')?.checked;
+        }
+        if (!IS_ELECTRON && state.config.remoteAccess && !cfg.remoteAccess
+            && !confirm('Cet appareil perdra l\'accès à SMV Player. Continuer ?')) return;
+
+        const wasTray = !!state.config.keepRunningInTray;
+        try {
+            state.config = await api.updateConfig(cfg);
+        } catch (err) {
+            return toast(`❌ ${err.message}`);
+        }
+        if (IS_ELECTRON && wasTray !== !!state.config.keepRunningInTray) {
+            window.electronAPI.setTrayEnabled(!!state.config.keepRunningInTray);
+        }
         const siUaEl = $('si-ua');
         if (siUaEl) siUaEl.textContent = cfg.userAgent;
 
         const pin = $('cfg-pin')?.value.trim();
 
         if (state.currentProfileId) {
-            await window.electronAPI.profileUpdate({
-                id: state.currentProfileId,
-                settings: { accentColor: color, pin }
-            });
+            // PIN vide = inchangé (le serveur ne renvoie jamais le PIN existant)
+            const settings = {accentColor: color};
+            if (pin) settings.pin = pin;
+            await api.profileUpdate({id: state.currentProfileId, settings}).catch(() => null);
+            applyProfileSettings({settings: {accentColor: color, hasPin: state.profileHasPin || !!pin}});
         }
         closeSettings();
         toast('✅ Paramètres sauvegardés');
     });
 
-    $('btn-browse-vlc')?.addEventListener('click', async () => {
-        const res = await window.electronAPI.browseVlcPath();
-        if (!res?.success) return;
-        const vlcInp = $('cfg-vlc');
-        if (vlcInp) vlcInp.value = res.path;
-        state.config = await window.electronAPI.updateConfig({
-            userAgent: $('cfg-ua')?.value.trim() || '',
-            networkTimeout: parseInt($('cfg-timeout')?.value) || 60,
-            referrer: $('cfg-referrer')?.value.trim() || '',
-            headerFields: $('cfg-headers')?.value.trim() || '',
-            vlcPath: res.path,
-        });
-        toast('✅ Chemin VLC sauvegardé');
+    $('btn-remove-pin')?.addEventListener('click', async () => {
+        if (!state.currentProfileId || !confirm('Supprimer le PIN parental de ce profil ?')) return;
+        await api.profileUpdate({id: state.currentProfileId, settings: {pin: ''}}).catch(() => null);
+        applyProfileSettings({settings: {accentColor: $('cfg-accent')?.value, hasPin: false}});
+        toast('🔓 PIN supprimé');
     });
 
+    const browseInto = async (inputId, title, winExt) => {
+        const res = await window.electronAPI?.browseFile({
+            title,
+            extensions: window.electronAPI.platform === 'win32' ? [winExt] : [],
+        });
+        if (!res?.success) return;
+        setFieldValue(inputId, res.path);
+    };
+    $('btn-browse-vlc')?.addEventListener('click', () => browseInto('cfg-vlc', 'Choisir VLC', 'exe'));
+    $('btn-browse-ffmpeg')?.addEventListener('click', () => browseInto('cfg-ffmpeg', 'Choisir ffmpeg', 'exe'));
+
     $('cfg-accent')?.addEventListener('input', (e) => applyAccentColor(e.target.value));
+
+    // ── Accès iPhone ─────────────────────────────────────────────────────────────
+    $('btn-copy-pair-url')?.addEventListener('click', () => {
+        navigator.clipboard?.writeText($('pair-url')?.value || '');
+        toast('📋 Adresse copiée');
+    });
+    $('btn-regen-key')?.addEventListener('click', async () => {
+        if (!confirm('Générer un nouveau code ? Les appareils déjà connectés devront scanner le nouveau QR code.')) return;
+        const res = await api.regenerateAccessKey().catch(() => null);
+        if (!res?.success) return toast('❌ Impossible de générer un code');
+        api.setAccessKey(res.accessKey);
+        history.replaceState(null, '', `/?key=${encodeURIComponent(res.accessKey)}`);
+        await refreshPairingInfo();
+        toast('🔑 Nouveau code généré');
+    });
 
     // ── Stalker connect ───────────────────────────────────────────────────────────
     $('btn-connect')?.addEventListener('click', async () => {
@@ -1336,7 +1800,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         try {
-            const res = await window.electronAPI.stalkerConnect({portalUrl, mac});
+            const res = await api.stalkerConnect({portalUrl, mac}, (p) => {
+                if (btn && p?.message) btn.textContent = `⏳ ${p.message}`;
+            });
             if (!res.success) {
                 toast(`❌ ${res.error}`);
                 return;
@@ -1367,6 +1833,34 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
 
+    // ── M3U (fichier ou URL, dont listes Xtream get.php) ─────────────────────────
+    $('btn-import-m3u')?.addEventListener('click', () => $('m3u-file')?.click());
+    $('m3u-file')?.addEventListener('change', async (e) => {
+        const file = e.target.files?.[0];
+        e.target.value = '';
+        if (!file) return;
+        try {
+            toast('⏳ Analyse de la liste…', 60000);
+            loadM3uResult(await api.m3uParse(await file.text()));
+        } catch (err) {
+            toast(`❌ ${err.message}`);
+        }
+    });
+    $('btn-load-m3u-url')?.addEventListener('click', async () => {
+        const m3uUrl = $('m3u-url')?.value.trim();
+        if (!/^https?:\/\//i.test(m3uUrl || '')) return toast('⚠️ URL M3U invalide');
+        const btn = $('btn-load-m3u-url');
+        if (btn) btn.disabled = true;
+        try {
+            const res = await api.m3uFetch(m3uUrl, (p) => toast(`⏳ ${p?.message || 'Chargement…'}`, 60000));
+            loadM3uResult(res, {m3uUrl});
+        } catch (err) {
+            toast(`❌ ${err.message}`);
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    });
+
     // ── Save profile ──────────────────────────────────────────────────────────────
     $('btn-save-profile')?.addEventListener('click', () => {
         const inp = $('profile-name-input');
@@ -1378,14 +1872,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     $('confirm-save-profile')?.addEventListener('click', async () => {
         const name = $('profile-name-input')?.value.trim();
         if (!name) return toast('⚠️ Nom requis');
-        const result = await window.electronAPI.profileSave({
-            name, channels: state.channels, favoriteChannelIds: state.favoriteChannelIds,
-            type: 'stalker',
-            portalUrl: state.saveContext === 'stalker' ? ($('portal-url')?.value.trim() || '') : '',
-            mac: state.saveContext === 'stalker' ? ($('portal-mac')?.value.trim() || '') : '',
-            stalkerSession: state.saveContext === 'stalker' ? state.stalkerSession : null,
-        });
+        const isM3u = state.saveContext === 'm3u';
+        let result;
+        try {
+            result = await api.profileSave({
+                name, channels: state.channels, favoriteChannelIds: state.favoriteChannelIds,
+                type: isM3u ? 'm3u' : 'stalker',
+                portalUrl: state.saveContext === 'stalker' ? ($('portal-url')?.value.trim() || '') : '',
+                mac: state.saveContext === 'stalker' ? ($('portal-mac')?.value.trim() || '') : '',
+                m3uUrl: isM3u ? (state.saveM3uUrl || '') : '',
+                stalkerSession: state.saveContext === 'stalker' ? state.stalkerSession : null,
+            });
+        } catch (err) {
+            return toast(`❌ ${err.message}`);
+        }
         state.currentProfileId = result.id;
+        state.profileHasPin = false;
         $('save-profile-modal')?.classList.add('hidden');
         await refreshProfilesList();
         toast(`💾 Profil "${name}" sauvegardé (${state.channels.length} chaînes)`);
@@ -1407,7 +1909,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     $('confirm-rename-profile')?.addEventListener('click', async () => {
         const name = $('rename-profile-input')?.value.trim();
         if (!state.renameProfileId || !name) return toast('⚠️ Nom requis');
-        await window.electronAPI.profileRename({id: state.renameProfileId, name});
+        await api.profileRename({id: state.renameProfileId, name});
         state.renameProfileId = null;
         const inp = $('rename-profile-input');
         if (inp) inp.value = '';
@@ -1438,7 +1940,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     $('confirm-edit-profile')?.addEventListener('click', async () => {
         const name = $('edit-name')?.value.trim();
         if (!name) return toast('⚠️ Nom requis');
-        await window.electronAPI.profileUpdate({id: state.renameProfileId, name});
+        await api.profileUpdate({id: state.renameProfileId, name});
         $('edit-profile-modal')?.classList.add('hidden');
         await refreshProfilesList();
         await renderWelcomeProfiles();
@@ -1449,6 +1951,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     $('btn-enter-app')?.addEventListener('click', () => {
         $('welcome-screen')?.classList.add('hidden');
         document.body.classList.remove('on-welcome');
+        // Mobile sans chaîne chargée : afficher directement les sources
+        if (!state.channels.length) bodyCls.add('sources-open');
     });
     document.querySelectorAll('#btn-home').forEach((btn) => btn.addEventListener('click', goToWelcome));
 
@@ -1460,9 +1964,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (volSlider) volSlider.value = 80;
     if (volLabel) volLabel.textContent = '80%';
 
+    const resumePlayback = () => {
+        const v = $('video');
+        if (!v) return;
+        const played = state.player ? state.player.play() : v.play();
+        played?.then?.(hideTapToPlay).catch?.(() => {
+        });
+    };
     $('vc-play')?.addEventListener('click', () => {
         const v = $('video');
-        v?.paused ? v.play() : v?.pause();
+        v?.paused ? resumePlayback() : v?.pause();
+    });
+    $('tap-to-play')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        hideTapToPlay();
+        resumePlayback();
     });
     $('vc-stop')?.addEventListener('click', () => {
         destroyPlayer();
@@ -1521,13 +2037,15 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (isSeekableContent() && dur) v.currentTime = (Number($('vc-seek').value) / 1000) * dur;
         state.isSeekDragging = false;
     });
-    $('vc-pip')?.addEventListener('click', async () => {
-        try {
-            document.pictureInPictureElement ? await document.exitPictureInPicture() : await $('video')?.requestPictureInPicture();
-        } catch (_) {
-            toast('❌ PiP non disponible');
-        }
-    });
+    $('vc-pip')?.addEventListener('click', togglePip);
+
+    // AirPlay (Safari) : bouton visible quand un récepteur est disponible
+    if (video && window.WebKitPlaybackTargetAvailabilityEvent) {
+        video.addEventListener('webkitplaybacktargetavailabilitychanged', (e) => {
+            $('vc-airplay')?.classList.toggle('hidden', e.availability !== 'available');
+        });
+        $('vc-airplay')?.addEventListener('click', () => video.webkitShowPlaybackTargetPicker());
+    }
     $('vc-fs')?.addEventListener('click', toggleFullscreen);
     $('btn-retry')?.addEventListener('click', () => {
         if (state.currentChannel) {
@@ -1543,25 +2061,38 @@ document.addEventListener('DOMContentLoaded', async () => {
         const vc = $('video-controls');
         const vw = $('video-wrap');
         vc?.classList.add('visible');
-        if (document.fullscreenElement) vw?.style.setProperty('cursor', 'default');
+        if (isFullscreen()) vw?.style.setProperty('cursor', 'default');
         clearTimeout(controlsTimer);
         controlsTimer = setTimeout(() => {
             vc?.classList.remove('visible');
-            if (document.fullscreenElement) vw?.style.setProperty('cursor', 'none');
-        }, 3000);
+            if (isFullscreen()) vw?.style.setProperty('cursor', 'none');
+        }, IS_TOUCH ? 4000 : 3000);
     }
 
     function hideControlsSoon(delay = 1000) {
         clearTimeout(controlsTimer);
         controlsTimer = setTimeout(() => {
             $('video-controls')?.classList.remove('visible');
-            if (document.fullscreenElement) $('video-wrap')?.style.setProperty('cursor', 'none');
+            if (isFullscreen()) $('video-wrap')?.style.setProperty('cursor', 'none');
         }, delay);
     }
 
-    $('video-wrap')?.addEventListener('mousemove', showControls);
+    // Souris : survol ; tactile : un toucher affiche/masque les contrôles
+    $('video-wrap')?.addEventListener('pointermove', (e) => {
+        if (e.pointerType === 'mouse') showControls();
+    });
     $('video-wrap')?.addEventListener('mouseleave', () => {
-        if (!document.fullscreenElement) hideControlsSoon(1000);
+        if (!isFullscreen()) hideControlsSoon(1000);
+    });
+    $('video-wrap')?.addEventListener('click', (e) => {
+        if (!IS_TOUCH || e.target.closest('.video-controls, .tap-to-play, button')) return;
+        const vc = $('video-controls');
+        if (vc?.classList.contains('visible')) {
+            clearTimeout(controlsTimer);
+            vc.classList.remove('visible');
+        } else {
+            showControls();
+        }
     });
     $('video-controls')?.addEventListener('mouseenter', () => {
         clearTimeout(controlsTimer);
@@ -1569,16 +2100,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
     $('video-controls')?.addEventListener('mouseleave', () => hideControlsSoon(2000));
 
-    document.addEventListener('fullscreenchange', () => {
+    const onFullscreenChange = () => {
         const vw = $('video-wrap');
-        if (document.fullscreenElement) {
+        if (isFullscreen()) {
             showControls();
         } else {
             vw?.style.removeProperty('cursor');
             clearTimeout(controlsTimer);
             $('video-controls')?.classList.remove('visible');
         }
-    });
+    };
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', onFullscreenChange);
 
     // ── Événements vidéo ──────────────────────────────────────────────────────────
     if (video) {
@@ -1608,10 +2141,18 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (video.style.opacity === '1') hideLoading();
         });
         video.addEventListener('error', () => {
-            if (!state.player) {
-                showError(getVideoError(video.error));
-                $('live-dot')?.classList.remove('visible');
+            if (state.playEngine !== 'native' || !video.getAttribute('src')) return;
+            if (state.failCurrent) {
+                // Format non lisible en direct : bascule transcodage / nouvelle tentative
+                state.failCurrent();
+                return;
             }
+            showError(getVideoError(video.error));
+            $('live-dot')?.classList.remove('visible');
+        });
+        video.addEventListener('playing', () => {
+            hideTapToPlay();
+            revealVideo();
         });
         video.addEventListener('play', () => {
             const b = $('vc-play');

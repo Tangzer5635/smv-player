@@ -2,17 +2,46 @@
 <html lang="fr">
 <head>
     <meta charset="UTF-8"/>
-    <title>IPTV Player</title>
-    <link rel="icon" type="image/x-icon" href="../assets/icon.ico"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'self'; script-src 'self'; worker-src 'self' blob:; connect-src 'self' blob:; img-src * data: blob:; media-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'"/>
+    <title>SMV Player</title>
+    <meta name="theme-color" content="#0b0b10"/>
+    <meta name="apple-mobile-web-app-capable" content="yes"/>
+    <meta name="mobile-web-app-capable" content="yes"/>
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+    <meta name="apple-mobile-web-app-title" content="SMV Player"/>
+    <meta name="format-detection" content="telephone=no"/>
+    <link rel="manifest" href="/manifest.webmanifest"/>
+    <link rel="icon" type="image/png" href="/assets/icon.png"/>
+    <link rel="apple-touch-icon" href="/assets/icon.png"/>
     <link rel="stylesheet" href="style.css"/>
-    <link rel="icon" type="image/x-icon" href="../assets/icon.ico"/>
-    <script src="https://cdn.jsdelivr.net/npm/mpegts.js@1.7.3/dist/mpegts.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.20/dist/hls.min.js"></script>
+    <script src="/vendor/mpegts.js"></script>
+    <script src="/vendor/hls.min.js"></script>
+    <script src="api.js"></script>
 </head>
 <body>
+<div id="pair-screen" class="pair-screen hidden">
+    <div class="pair-card">
+        <img class="welcome-logo" src="/assets/icon.png" alt="SMV Player"/>
+        <h1>Connexion à SMV Player</h1>
+        <p>
+            Ouvrez SMV Player sur votre ordinateur, puis <strong>Paramètres → Accès iPhone</strong>
+            et scannez le QR code avec l'appareil photo.
+        </p>
+        <p class="welcome-sub">Ou saisissez le code d'accès affiché :</p>
+        <form id="pair-form" class="pair-form" autocomplete="off">
+            <input id="pair-code" type="text" inputmode="text" autocapitalize="characters" autocorrect="off"
+                   spellcheck="false" maxlength="16" placeholder="CODE"/>
+            <button class="btn-primary" type="submit">Se connecter</button>
+        </form>
+        <p id="pair-error" class="pair-error hidden">Code incorrect ou serveur injoignable</p>
+    </div>
+</div>
+
 <div id="welcome-screen" class="welcome-screen">
     <div class="welcome-content">
-        <img class="welcome-logo" src="../assets/icon.ico" alt="SMV Player"/>
+        <img class="welcome-logo" src="/assets/icon.png" alt="SMV Player"/>
         <h1>Bienvenue sur SMV Player</h1>
         <p>
             Votre application IPTV élégante, simple et rapide.
@@ -44,16 +73,16 @@
 <div class="titlebar">
     <div class="titlebar-left">
         <span class="app-icon">📺</span>
-        <img class="app-icon app-icon-img" src="../assets/icon.ico" alt=""/>
+        <img class="app-icon app-icon-img" src="/assets/icon.png" alt=""/>
         <span class="app-name">SMV Player</span>
     </div>
     <div class="titlebar-right">
         <button id="btn-home" class="tb-btn" title="Accueil">🏠</button>
         <button id="btn-sidebar-toggle" class="tb-btn" title="Menu">☰</button>
         <button id="btn-settings" class="tb-btn" title="Paramètres">⚙️</button>
-        <button id="btn-minimize" class="tb-btn">─</button>
-        <button id="btn-maximize" class="tb-btn">☐</button>
-        <button id="btn-close" class="tb-btn tb-close">✕</button>
+        <button id="btn-minimize" class="tb-btn electron-only">─</button>
+        <button id="btn-maximize" class="tb-btn electron-only">☐</button>
+        <button id="btn-close" class="tb-btn tb-close electron-only">✕</button>
     </div>
     <div id="sidebar-backdrop" class="sidebar-backdrop hidden"></div>
 </div>
@@ -84,8 +113,17 @@
                 <label>Adresse MAC</label>
                 <input type="text" id="portal-mac" placeholder="00:1A:79:XX:XX:XX" maxlength="17"/>
             </div>
-            <button id="btn-import-m3u" class="btn-secondary">📂 Importer un fichier M3U</button>
             <button id="btn-connect" class="btn-primary">🔗 Connexion</button>
+            <details id="m3u-details" class="m3u-details">
+                <summary class="form-divider"><span>ou liste M3U / Xtream</span></summary>
+                <div class="form-group">
+                    <label>URL M3U</label>
+                    <input type="url" id="m3u-url" placeholder="http://serveur/get.php?username=…&type=m3u_plus"/>
+                </div>
+                <button id="btn-load-m3u-url" class="btn-secondary">🌐 Charger l'URL M3U</button>
+                <button id="btn-import-m3u" class="btn-secondary">📂 Importer un fichier M3U</button>
+                <input id="m3u-file" type="file" class="hidden"/>
+            </details>
             <button id="btn-save-profile" class="btn-secondary hidden">💾 Sauver profil</button>
             <div id="conn-info" class="conn-info hidden">
                 <span id="conn-label">Connecté</span>
@@ -126,7 +164,9 @@
             <span id="now-group" class="now-group"></span>
         </div>
         <div id="video-wrap" class="video-wrap">
-            <video id="video" autoplay></video>
+            <video id="video" autoplay playsinline webkit-playsinline x-webkit-airplay="allow"></video>
+
+            <button id="tap-to-play" class="tap-to-play hidden" type="button" aria-label="Lecture">▶</button>
 
             <div id="placeholder" class="overlay">
                 <div class="ph-icon">📺</div>
@@ -167,6 +207,7 @@
                     <div class="vc-right">
                         <button id="vc-reload" class="vc-btn" title="Recharger">🔄</button>
                         <button id="vc-vlc" class="vc-btn" title="Ouvrir dans VLC">🎬</button>
+                        <button id="vc-airplay" class="vc-btn hidden" title="AirPlay">📡</button>
                         <button id="vc-pip" class="vc-btn" title="Picture-in-Picture">🖼️</button>
                         <button id="vc-fs" class="vc-btn" title="Plein écran">⛶</button>
                     </div>
@@ -183,47 +224,117 @@
 </div>
 
 <div id="settings-modal" class="modal hidden">
-    <div class="modal-content">
+    <div class="modal-content modal-settings">
         <div class="modal-header">
             <button id="btn-home" class="btn">🏠 Accueil</button>
             <h2>⚙️ Paramètres</h2>
             <button id="close-settings" class="btn-icon">✕</button>
         </div>
 
-        <div class="form-group">
-            <label>User-Agent</label>
-            <input type="text" id="cfg-ua"/>
-        </div>
-        <div class="form-group">
-            <label>Timeout (s)</label>
-            <input type="number" id="cfg-timeout"/>
-        </div>
-        <div class="form-group">
-            <label>Referrer</label>
-            <input type="text" id="cfg-referrer"/>
-        </div>
-        <div class="form-group">
-            <label>Headers (key:val,key2:val2)</label>
-            <input type="text" id="cfg-headers"/>
-        </div>
-        <div class="form-group">
-            <label>VLC path (optionnel)</label>
-            <input type="text" id="cfg-vlc" placeholder="C:\Program Files\VideoLAN\VLC\vlc.exe"/>
-        </div>
-        <div class="form-group">
-            <label>Couleur principale</label>
-            <input type="color" id="cfg-accent" value="#6c5ce7"/>
-        </div>
-        <div class="form-group">
-            <label>PIN parental</label>
-            <input
-                    id="cfg-pin"
-                    type="password"
-                    placeholder="PIN parental"
-            />
-        </div>
+        <section class="settings-section">
+            <h3>📱 Accès iPhone / réseau local</h3>
+            <label class="toggle-row">
+                <input type="checkbox" id="cfg-remote"/>
+                <span>Autoriser l'accès depuis le réseau local (iPhone, iPad…)</span>
+            </label>
+            <div id="pair-block" class="pair-block">
+                <img id="pair-qr" class="pair-qr hidden" alt="QR code d'accès"/>
+                <div class="pair-details">
+                    <p class="pair-hint">
+                        Sur l'iPhone (même Wi-Fi) : scannez le QR code avec l'appareil photo, puis dans Safari
+                        <strong>Partager → Sur l'écran d'accueil</strong> pour l'installer comme une app.
+                    </p>
+                    <div class="form-group">
+                        <label>Adresse</label>
+                        <div class="readonly-field">
+                            <input id="pair-url" readonly/>
+                            <button id="btn-copy-pair-url" type="button" title="Copier">📋</button>
+                        </div>
+                    </div>
+                    <div class="pair-meta">
+                        <span>Code d'accès : <strong id="pair-key">—</strong></span>
+                        <button id="btn-regen-key" class="btn-tiny" type="button" title="Générer un nouveau code">🔄 Nouveau code</button>
+                    </div>
+                    <div class="pair-meta">
+                        <span id="pair-ffmpeg">Transcodage iPhone : —</span>
+                    </div>
+                </div>
+            </div>
+            <label class="toggle-row electron-only">
+                <input type="checkbox" id="cfg-tray"/>
+                <span>Garder le serveur actif quand la fenêtre est fermée (icône de notification)</span>
+            </label>
+        </section>
 
-        <button id="btn-browse-vlc" class="btn-secondary" type="button">Parcourir VLC</button>
+        <section class="settings-section">
+            <h3>▶️ Lecture</h3>
+            <div class="form-group">
+                <label>Mode de lecture (cet appareil)</label>
+                <select id="cfg-playback-mode">
+                    <option value="auto">Automatique</option>
+                    <option value="hls">Toujours via transcodage HLS (compatibilité iPhone)</option>
+                    <option value="direct">Toujours en direct (sans transcodage)</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Vidéo transcodée pour iPhone</label>
+                <select id="cfg-hls-video">
+                    <option value="copy">Copie sans réencodage (rapide, recommandé)</option>
+                    <option value="h264">Réencodage H.264 (compatibilité maximale, sollicite le PC)</option>
+                </select>
+            </div>
+            <div class="form-group electron-only">
+                <label>VLC path (optionnel)</label>
+                <div class="readonly-field">
+                    <input type="text" id="cfg-vlc" placeholder="C:\Program Files\VideoLAN\VLC\vlc.exe"/>
+                    <button id="btn-browse-vlc" type="button" title="Parcourir">📂</button>
+                </div>
+            </div>
+            <div class="form-group electron-only">
+                <label>ffmpeg path (optionnel, sinon version intégrée)</label>
+                <div class="readonly-field">
+                    <input type="text" id="cfg-ffmpeg" placeholder="ffmpeg intégré"/>
+                    <button id="btn-browse-ffmpeg" type="button" title="Parcourir">📂</button>
+                </div>
+            </div>
+        </section>
+
+        <section class="settings-section">
+            <h3>🌐 Réseau IPTV</h3>
+            <div class="form-group">
+                <label>User-Agent</label>
+                <input type="text" id="cfg-ua"/>
+            </div>
+            <div class="form-group">
+                <label>Timeout (s)</label>
+                <input type="number" id="cfg-timeout" inputmode="numeric"/>
+            </div>
+            <div class="form-group">
+                <label>Referrer</label>
+                <input type="text" id="cfg-referrer"/>
+            </div>
+            <div class="form-group">
+                <label>Headers (key:val,key2:val2)</label>
+                <input type="text" id="cfg-headers"/>
+            </div>
+        </section>
+
+        <section class="settings-section">
+            <h3>👤 Profil actif</h3>
+            <div class="form-group">
+                <label>Couleur principale</label>
+                <input type="color" id="cfg-accent" value="#6c5ce7"/>
+            </div>
+            <div class="form-group">
+                <label>PIN parental</label>
+                <div class="readonly-field">
+                    <input id="cfg-pin" type="password" inputmode="numeric" autocomplete="new-password"
+                           placeholder="PIN parental"/>
+                    <button id="btn-remove-pin" class="hidden" type="button" title="Supprimer le PIN">🗑️</button>
+                </div>
+            </div>
+        </section>
+
         <button id="save-settings" class="btn-primary">💾 Sauvegarder</button>
     </div>
 </div>
@@ -285,9 +396,23 @@
     </div>
 </div>
 
-<div id="toast" class="toast"></div>
+<div id="pin-modal" class="modal hidden">
+    <div class="modal-content modal-sm">
+        <div class="modal-header">
+            <h2>🔒 PIN parental</h2>
+            <button id="close-pin" class="btn-icon" type="button">✕</button>
+        </div>
+        <form id="pin-form" autocomplete="off">
+            <div class="form-group">
+                <label id="pin-label">PIN requis pour ce profil</label>
+                <input id="pin-input" type="password" inputmode="numeric" autocomplete="off"/>
+            </div>
+            <button class="btn-primary" type="submit">🔓 Déverrouiller</button>
+        </form>
+    </div>
+</div>
 
-<!--<script src="renderer.js"></script>-->
+<div id="toast" class="toast"></div>
 
 <script src="index.js"></script>
 </body>

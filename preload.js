@@ -1,22 +1,16 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
+// Seules les fonctions propres au bureau passent par IPC.
+// Les données (profils, portail, flux) passent par l'API HTTP du serveur intégré,
+// commune avec l'iPhone (voir renderer/api.js).
 contextBridge.exposeInMainWorld('electronAPI', {
-  openFileDialog:   ()    => ipcRenderer.invoke('open-file-dialog'),
-  stalkerConnect:   (p)   => ipcRenderer.invoke('stalker-connect', p),
-  stalkerGetStream: (p)   => ipcRenderer.invoke('stalker-get-stream', p),
-  stalkerSeriesEpisodes: (p) => ipcRenderer.invoke('stalker-series-episodes', p),
-  proxySetTarget:   (p)   => ipcRenderer.invoke('proxy-set-target', p),
-  vlcPlay:          (p)   => ipcRenderer.invoke('vlc-play', p),
-  getConfig:        ()    => ipcRenderer.invoke('get-config'),
-  updateConfig:     (cfg) => ipcRenderer.invoke('update-config', cfg),
+  isElectron:       true,
+  platform:         process.platform,
 
-  profilesList:     ()    => ipcRenderer.invoke('profiles-list'),
-  profileSave:      (p)   => ipcRenderer.invoke('profile-save', p),
-  profileLoad:      (id)  => ipcRenderer.invoke('profile-load', id),
-  profileDelete:    (id)  => ipcRenderer.invoke('profile-delete', id),
-  profileUpdate:    (p)   => ipcRenderer.invoke('profile-update', p),
-  profileRename:    (p)   => ipcRenderer.invoke('profile-rename', p),
-  browseVlcPath:    ()    => ipcRenderer.invoke('browse-vlc-path'),
+  vlcPlay:          (p)   => ipcRenderer.invoke('vlc-play', p),
+  browseFile:       (p)   => ipcRenderer.invoke('browse-file', p),
+  openExternal:     (url) => ipcRenderer.invoke('open-external', url),
+  setTrayEnabled:   (on)  => ipcRenderer.invoke('tray-setting', on),
 
   windowMinimize:   ()    => ipcRenderer.send('window-minimize'),
   windowMaximize:   ()    => ipcRenderer.send('window-maximize'),
