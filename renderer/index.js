@@ -55,6 +55,7 @@ const state = {
     preferServerHls: false,   // le direct a échoué pour cette chaîne
     attemptId: 0,
     failCurrent: null,
+    lastError: '',            // dernière erreur du lecteur (affichée après les tentatives)
     streamUrl: '',            // URL amont complète du flux en cours
     playToken: 0,             // annule les lectures devenues obsolètes (zapping rapide)
     renderLimit: RENDER_CHUNK,
@@ -515,8 +516,9 @@ function startPlayer(url, {isLive = true, engine = 'native'} = {}) {
     let bufferTimer = null;
 
     // Une seule prise en charge d'échec par tentative (plusieurs événements d'erreur possibles)
-    const fail = () => {
+    const fail = (reason) => {
         if (attempt !== state.attemptId) return;
+        if (reason) state.lastError = reason;
         state.attemptId++;
         clearTimeout(bufferTimer);
         handlePlaybackFailure();
@@ -530,7 +532,7 @@ function startPlayer(url, {isLive = true, engine = 'native'} = {}) {
             return;
         }
         if (err?.name === 'AbortError') return;
-        fail();
+        fail(err?.message || err?.name);
     };
 
     function onBufferReady() {
@@ -563,9 +565,9 @@ function startPlayer(url, {isLive = true, engine = 'native'} = {}) {
             if (info.decodedFrames > 0) onBufferReady();
             updateQualityIndicator(info);
         });
-        state.player.on(mpegts.Events.ERROR, (type, details) => {
-            console.warn('[mpegts.js]', type, details);
-            fail();
+        state.player.on(mpegts.Events.ERROR, (type, details, info) => {
+            console.warn('[mpegts.js]', type, details, info);
+            fail(info?.code > 0 ? `HTTP ${info.code}` : info?.msg || details || type);
         });
         const played = state.player.play();
         played?.catch?.(onPlayRejected);
@@ -581,7 +583,7 @@ function startPlayer(url, {isLive = true, engine = 'native'} = {}) {
         state.hls.on(Hls.Events.ERROR, (_, data) => {
             if (!data?.fatal) return;
             console.warn('[hls.js]', data.type, data.details, data.response?.code || '');
-            fail();
+            fail(data.response?.code ? `HTTP ${data.response.code}` : data.details);
         });
         // Bitrate HLS via FRAG_CHANGED
         state.hls.on(Hls.Events.FRAG_CHANGED, () => {
@@ -602,7 +604,9 @@ function startPlayer(url, {isLive = true, engine = 'native'} = {}) {
 // Échec du moteur : on tente d'abord le transcodage HLS du serveur, puis on relance
 function handlePlaybackFailure() {
     const pb = state.playback;
-    if (pb?.hlsUrl && state.playSource !== 'hls' && getPlaybackMode() !== 'direct') {
+    // Flux refusé par le serveur (HTTP 4xx/5xx) : le transcodage échouerait de la même façon
+    const refused = /^HTTP [45]\d\d$/.test(state.lastError);
+    if (pb?.hlsUrl && !refused && state.playSource !== 'hls' && getPlaybackMode() !== 'direct') {
         state.preferServerHls = true;
         state.playSource = 'hls';
         toast('🔁 Mode compatibilité : transcodage du flux…');
@@ -624,10 +628,12 @@ function retryPlay() {
     } else {
         const video = $('video');
         if (video) video.style.opacity = '1';
-        const hint = state.playback?.hlsUrl && state.config?.hlsVideoMode !== 'h264'
+        const reason = state.lastError ? ` (${state.lastError})` : '';
+        const isHttpError = /^HTTP \d+/.test(state.lastError);
+        const hint = !isHttpError && state.playback?.hlsUrl && state.config?.hlsVideoMode !== 'h264'
             ? ' — essayez « Réencodage H.264 » dans Paramètres › Lecture'
             : '';
-        showError(`Impossible de lire le flux après 3 tentatives${hint}`);
+        showError(`Impossible de lire le flux après 3 tentatives${reason}${hint}`);
     }
 }
 
@@ -639,6 +645,7 @@ async function playChannel(ch, {isRetry = false} = {}) {
     if (!isRetry) {
         state.retryCount = 0;
         state.preferServerHls = false;
+        state.lastError = '';
     }
     localStorage.setItem('lastChannelId', getChannelKey(ch));
 
@@ -2155,7 +2162,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (state.playEngine !== 'native' || !video.getAttribute('src')) return;
             if (state.failCurrent) {
                 // Format non lisible en direct : bascule transcodage / nouvelle tentative
-                state.failCurrent();
+                state.failCurrent(getVideoError(video.error));
                 return;
             }
             showError(getVideoError(video.error));

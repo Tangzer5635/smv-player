@@ -6,7 +6,7 @@ const crypto = require('crypto');
 const {spawn} = require('child_process');
 const {pipeline, Transform} = require('stream');
 const {randomId, parseHeaderFields} = require('./utils');
-const {agentFor, describeNetworkError} = require('./net');
+const {agentFor, describeNetworkError, maskProxy} = require('./net');
 
 /*
  * Lecture : sessions de proxy + transcodage HLS
@@ -131,7 +131,7 @@ async function fetchUpstream(targetUrl, headers, {method = 'GET', redirects = 0,
                     resolve(fetchUpstream(redirectUrl, headers, {method, redirects: redirects + 1, timeoutMs}));
                     return;
                 }
-                resolve({remoteRes, remoteReq, finalUrl: targetUrl});
+                resolve({remoteRes, remoteReq, finalUrl: targetUrl, proxy});
             });
         } catch (err) {
             fail(err);
@@ -190,6 +190,13 @@ function readFirstChunk(stream, timeoutMs = 15000) {
         stream.once('end', onEnd);
         stream.once('error', onEnd);
     });
+}
+
+// Extrait lisible d'une page d'erreur (titre HTML ou début du texte)
+function summarizeBody(body) {
+    const title = body.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1];
+    const text = (title || body.replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
+    return text.slice(0, 160);
 }
 
 function sendText(res, status, text) {
@@ -625,7 +632,7 @@ class PlaybackManager {
             return;
         }
 
-        const {remoteRes, finalUrl} = upstream;
+        const {remoteRes, finalUrl, proxy} = upstream;
         if (res.destroyed) {
             remoteRes.destroy();
             return;
@@ -633,6 +640,25 @@ class PlaybackManager {
 
         const status = remoteRes.statusCode || 200;
         const contentType = remoteRes.headers['content-type'] || '';
+
+        // Diagnostic du flux principal (pas des segments HLS) : code HTTP, type, chemin réseau
+        if (targetUrl === session.url) {
+            const via = proxy ? `via le proxy ${maskProxy(proxy)}` : 'connexion directe';
+            if (status >= 400 || /text\/html/i.test(contentType)) {
+                let detail = '';
+                try {
+                    detail = summarizeBody(await readBody(remoteRes, 64 * 1024));
+                } catch (_) {
+                }
+                console.warn(`⚠️ Flux refusé : HTTP ${status} ${contentType || '(sans type)'} — ${via}${detail ? ` — « ${detail} »` : ''}`);
+                sendText(res, status >= 400 ? status : 502, `Flux refusé (HTTP ${status})${detail ? ` : ${detail}` : ''}`);
+                return;
+            }
+            if (!session.loggedStart) {
+                session.loggedStart = true;
+                console.log(`▶ Flux : HTTP ${status} ${contentType || '(sans type)'} — ${via}`);
+            }
+        }
 
         if (status < 400 && isPlaylistResponse(contentType, finalUrl)) {
             try {
