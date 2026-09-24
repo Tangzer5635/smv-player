@@ -606,6 +606,13 @@ function handlePlaybackFailure() {
     const pb = state.playback;
     // Flux refusé par le serveur (HTTP 4xx/5xx) : le transcodage échouerait de la même façon
     const refused = /^HTTP [45]\d\d$/.test(state.lastError);
+    // Refus définitif (4xx) : inutile de redemander un lien au portail en boucle
+    if (/^HTTP 4\d\d$/.test(state.lastError)) {
+        const video = $('video');
+        if (video) video.style.opacity = '1';
+        showError(`Flux refusé (${state.lastError}) — détail dans le terminal de SMV Player`);
+        return;
+    }
     if (pb?.hlsUrl && !refused && state.playSource !== 'hls' && getPlaybackMode() !== 'direct') {
         state.preferServerHls = true;
         state.playSource = 'hls';

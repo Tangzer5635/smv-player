@@ -192,11 +192,37 @@ function readFirstChunk(stream, timeoutMs = 15000) {
     });
 }
 
-// Extrait lisible d'une page d'erreur (titre HTML ou début du texte)
+// Début d'une réponse (les pages de blocage embarquent parfois des images volumineuses)
+function readBodyPrefix(stream, maxBytes) {
+    return new Promise((resolve) => {
+        const chunks = [];
+        let size = 0;
+        const done = () => {
+            stream.destroy();
+            resolve(Buffer.concat(chunks).subarray(0, maxBytes).toString('utf-8'));
+        };
+        stream.on('data', (chunk) => {
+            chunks.push(chunk);
+            size += chunk.length;
+            if (size >= maxBytes) done();
+        });
+        stream.on('end', done);
+        stream.on('error', done);
+        setTimeout(done, 5000).unref();
+    });
+}
+
+// Extrait lisible d'une page d'erreur : titre HTML + début du texte visible
 function summarizeBody(body) {
-    const title = body.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1];
-    const text = (title || body.replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
-    return text.slice(0, 160);
+    const title = (body.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1] || '').trim();
+    const text = body
+        .replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, ' ')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/&nbsp;/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    const visible = title && text.startsWith(title) ? text.slice(title.length).trim() : text;
+    return [title, visible.slice(0, 240)].filter(Boolean).join(' — ');
 }
 
 function sendText(res, status, text) {
@@ -645,12 +671,9 @@ class PlaybackManager {
         if (targetUrl === session.url) {
             const via = proxy ? `via le proxy ${maskProxy(proxy)}` : 'connexion directe';
             if (status >= 400 || /text\/html/i.test(contentType)) {
-                let detail = '';
-                try {
-                    detail = summarizeBody(await readBody(remoteRes, 64 * 1024));
-                } catch (_) {
-                }
-                console.warn(`⚠️ Flux refusé : HTTP ${status} ${contentType || '(sans type)'} — ${via}${detail ? ` — « ${detail} »` : ''}`);
+                const detail = summarizeBody(await readBodyPrefix(remoteRes, 256 * 1024));
+                const server = remoteRes.headers.server || remoteRes.headers['x-powered-by'] || '';
+                console.warn(`⚠️ Flux refusé : HTTP ${status} ${contentType || '(sans type)'} — ${via}${server ? ` — serveur « ${server} »` : ''}${detail ? ` — « ${detail} »` : ' — page vide'}`);
                 sendText(res, status >= 400 ? status : 502, `Flux refusé (HTTP ${status})${detail ? ` : ${detail}` : ''}`);
                 return;
             }
