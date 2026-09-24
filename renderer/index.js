@@ -1461,6 +1461,7 @@ function fillConfigForm(cfg = {}) {
     setFieldValue('cfg-timeout', cfg.networkTimeout ?? 60);
     setFieldValue('cfg-referrer', cfg.referrer);
     setFieldValue('cfg-headers', cfg.headerFields);
+    setFieldValue('cfg-proxy', cfg.httpProxy);
     setFieldValue('cfg-vlc', cfg.vlcPath);
     setFieldValue('cfg-ffmpeg', cfg.ffmpegPath);
     setFieldValue('cfg-hls-video', cfg.hlsVideoMode || 'copy');
@@ -1496,6 +1497,13 @@ async function refreshPairingInfo() {
                 : '⚠️ ffmpeg introuvable : les flux TS/MKV ne seront pas lisibles sur iPhone';
         }
         $('pair-block')?.classList.toggle('disabled', !info.remoteAccess);
+        const proxyStatus = $('proxy-status');
+        if (proxyStatus) {
+            const sources = {config: 'paramètres', env: 'variables d\'environnement', system: 'proxy système'};
+            proxyStatus.textContent = info.proxy?.address
+                ? `Proxy utilisé : ${info.proxy.address} (${sources[info.proxy.source] || info.proxy.source})`
+                : 'Connexion directe (aucun proxy détecté)';
+        }
     } catch (err) {
         if (urlInput) urlInput.value = err.message;
     }
@@ -1715,6 +1723,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             networkTimeout: parseInt($('cfg-timeout')?.value) || 60,
             referrer: $('cfg-referrer')?.value.trim() || '',
             headerFields: $('cfg-headers')?.value.trim() || '',
+            httpProxy: $('cfg-proxy')?.value.trim() || '',
             hlsVideoMode: $('cfg-hls-video')?.value || 'copy',
             remoteAccess: !!$('cfg-remote')?.checked,
         };
@@ -1728,7 +1737,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         const wasTray = !!state.config.keepRunningInTray;
         try {
-            state.config = await api.updateConfig(cfg);
+            const updated = await api.updateConfig(cfg);
+            if (updated?.success === false) return toast(`❌ ${updated.error}`);
+            state.config = updated;
         } catch (err) {
             return toast(`❌ ${err.message}`);
         }

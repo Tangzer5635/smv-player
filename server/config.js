@@ -1,11 +1,14 @@
 const path = require('path');
 const {randomKey, readJsonFile, writeJsonFileSync} = require('./utils');
+const {normalizeProxyUrl} = require('./net');
 
 const DEFAULT_CONFIG = {
     userAgent: 'Lavf/57.83.100',
     networkTimeout: 60,
     referrer: '',
     headerFields: '',
+    // Proxy HTTP sortant (réseau d'entreprise) — vide : variables d'environnement / proxy système
+    httpProxy: '',
     vlcPath: '',
     ffmpegPath: '',
     // Transcodage HLS pour iPhone : 'copy' (remux, quasi sans CPU) ou 'h264' (réencodage complet)
@@ -24,6 +27,7 @@ const EDITABLE_FIELDS = [
     'networkTimeout',
     'referrer',
     'headerFields',
+    'httpProxy',
     'vlcPath',
     'ffmpegPath',
     'hlsVideoMode',
@@ -52,6 +56,8 @@ class ConfigStore {
     }
 
     update(patch = {}) {
+        // Lève une erreur si l'adresse du proxy est invalide (aucun champ n'est modifié)
+        if (patch.httpProxy !== undefined) patch = {...patch, httpProxy: normalizeProxyUrl(patch.httpProxy)};
         for (const field of EDITABLE_FIELDS) {
             if (patch[field] === undefined) continue;
             this.data[field] = patch[field];

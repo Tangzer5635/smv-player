@@ -70,6 +70,27 @@ Conseils :
 - Un flux ne passe pas sur iPhone ? Paramètres → Lecture → **Réencodage H.264**
   (compatibilité maximale, sollicite davantage le processeur du PC).
 
+### 🏢 Réseau d'entreprise (proxy)
+
+Sur un réseau filtré, le portail et les flux doivent passer par le proxy de l'entreprise.
+SMV Player utilise, dans cet ordre :
+
+1. le proxy saisi dans **Paramètres → Réseau IPTV → Proxy HTTP** (ex. `http://proxy:8080`,
+   `http://user:motdepasse@proxy:8080`) ;
+2. les variables d'environnement `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` ;
+3. le proxy système de Windows / macOS (fichier PAC compris).
+
+La ligne « Proxy utilisé » sous le champ indique le chemin retenu. Symptôme typique d'un proxy
+manquant : le portail répond mais la lecture échoue avec `connect ETIMEDOUT` dans les logs.
+
+Si `npm start` échoue avec « Downloading Electron binary… fetch failed », téléchargez
+`electron-v<version>-win32-x64.zip` depuis les releases GitHub d'Electron, puis :
+
+```powershell
+Expand-Archive electron-v42.3.0-win32-x64.zip -DestinationPath node_modules\electron\dist -Force
+Set-Content node_modules\electron\path.txt -Value "electron.exe" -NoNewline
+```
+
 ### 🖥️ Mode serveur seul (NAS, Raspberry Pi, PC toujours allumé)
 
 ```bash
@@ -117,6 +138,7 @@ server/
   m3u.js           analyse des listes M3U / M3U Plus
   profiles.js      stockage des profils (profiles.json)
   config.js        configuration (config.json, code d'accès)
+  net.js           accès réseau sortant (proxy entreprise / système)
   cli.js           mode serveur sans interface
 renderer/
   index.html, style.css, index.js   interface (PC + iPhone)

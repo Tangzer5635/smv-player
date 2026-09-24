@@ -1,5 +1,4 @@
 const http = require('http');
-const https = require('https');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -14,6 +13,7 @@ const {PlaybackManager} = require('./playback');
 const stalker = require('./stalker');
 const {parseM3U} = require('./m3u');
 const {randomId, safeEqual, getLanAddresses, isLoopback} = require('./utils');
+const net = require('./net');
 
 /*
  * Serveur SMV Player
@@ -178,10 +178,12 @@ function bundledFfmpegPath() {
 // SERVEUR
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function createSmvServer({dataDir, host = '0.0.0.0', port, ffmpegPath, appVersion = '0.0.0'} = {}) {
+function createSmvServer({dataDir, host = '0.0.0.0', port, ffmpegPath, appVersion = '0.0.0', systemProxyResolver} = {}) {
     fs.mkdirSync(dataDir, {recursive: true});
 
     const config = new ConfigStore(dataDir);
+    net.setConfiguredProxy(config.get().httpProxy);
+    if (systemProxyResolver) net.setSystemProxyResolver(systemProxyResolver);
     const profiles = new ProfileStore(dataDir);
     const jobs = new Map();
 
@@ -249,6 +251,7 @@ function createSmvServer({dataDir, host = '0.0.0.0', port, ffmpegPath, appVersio
     async function getServerInfo() {
         const cfg = config.get();
         const addresses = cfg.remoteAccess ? getLanAddresses() : [];
+        const proxyInfo = await net.describeProxy('http://example.com/');
         const urls = await Promise.all(addresses.slice(0, 4).map(async (a, index) => {
             const url = `http://${a.address}:${listeningPort}/?key=${cfg.accessKey}`;
             const qr = index < 3
@@ -264,6 +267,7 @@ function createSmvServer({dataDir, host = '0.0.0.0', port, ffmpegPath, appVersio
             remoteAccess: cfg.remoteAccess,
             accessKey: cfg.accessKey,
             ffmpeg: !!resolvedFfmpeg,
+            proxy: {address: net.maskProxy(proxyInfo.proxy), source: proxyInfo.source},
             urls,
         };
     }
@@ -299,7 +303,13 @@ function createSmvServer({dataDir, host = '0.0.0.0', port, ffmpegPath, appVersio
             if (method === 'GET') return config.getPublic();
             if (method === 'PUT') {
                 const before = config.get().ffmpegPath;
-                const updated = config.update(await readJsonBody(req));
+                let updated;
+                try {
+                    updated = config.update(await readJsonBody(req));
+                } catch (err) {
+                    throw new HttpError(400, `Proxy invalide : ${err.message}`);
+                }
+                net.setConfiguredProxy(updated.httpProxy);
                 if (updated.ffmpegPath !== before) detectFfmpeg();
                 return updated;
             }
@@ -392,7 +402,7 @@ function createSmvServer({dataDir, host = '0.0.0.0', port, ffmpegPath, appVersio
                         timeout: netTimeout() * 2,
                         maxContentLength: JSON_BODY_LIMIT,
                         headers: {'User-Agent': config.get().userAgent},
-                        httpsAgent: new https.Agent({rejectUnauthorized: false}),
+                        ...(await net.axiosNetOptions(m3uUrl)),
                         transformResponse: (data) => data,
                     });
                     onProgress({message: 'Analyse de la liste…'});

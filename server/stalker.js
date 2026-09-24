@@ -1,15 +1,14 @@
 const axios = require('axios');
-const https = require('https');
+const {axiosNetOptions} = require('./net');
 
 // ── Helpers partagés ─────────────────────────────────────────────────────────
 
-const insecureAgent = new https.Agent({rejectUnauthorized: false});
-
-function createClient(headers, timeoutMs) {
+// Proxy éventuel choisi pour le portail : les flux suivront le même chemin (server/net.js)
+async function createClient(headers, timeoutMs, serverBase) {
     return axios.create({
         headers,
         timeout: timeoutMs,
-        httpsAgent: insecureAgent,
+        ...(await axiosNetOptions(serverBase)),
     });
 }
 
@@ -110,7 +109,7 @@ async function openSession({serverBase, mac, stalkerHeaders, token, userAgent, t
         ...stalkerHeaders,
         'Cookie': buildCookie(mac),
     };
-    const axiosInst = createClient(baseHeaders, timeoutMs);
+    const axiosInst = await createClient(baseHeaders, timeoutMs, serverBase);
 
     const hsRes = await axiosInst.get(
         `${serverBase}/portal.php?action=handshake&type=stb&token=&JsHttpRequest=1-xml`
@@ -148,7 +147,7 @@ async function connect({portalUrl, mac, userAgent, timeoutMs}, onProgress = () =
     const hsUrl = `${serverBase}/portal.php?action=handshake&type=stb&token=&JsHttpRequest=1-xml`;
     console.log(`Handshake: ${hsUrl}`);
 
-    const axiosInst = createClient(stalkerHeaders, timeoutMs);
+    const axiosInst = await createClient(stalkerHeaders, timeoutMs, serverBase);
 
     const hsRes = await axiosInst.get(hsUrl);
     const token = hsRes.data?.js?.token;

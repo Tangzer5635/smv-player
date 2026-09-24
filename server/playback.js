@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const {spawn} = require('child_process');
 const {pipeline, Transform} = require('stream');
 const {randomId, parseHeaderFields} = require('./utils');
+const {agentFor, describeNetworkError} = require('./net');
 
 /*
  * Lecture : sessions de proxy + transcodage HLS
@@ -17,9 +18,6 @@ const {randomId, parseHeaderFields} = require('./utils');
  * L'identifiant de session (128 bits aléatoires) sert de jeton : ces URL peuvent
  * être ouvertes par le lecteur natif iOS, VLC ou ffmpeg sans clé d'accès.
  */
-
-const httpAgent = new http.Agent({keepAlive: true, maxSockets: 64});
-const httpsAgent = new https.Agent({keepAlive: true, maxSockets: 64, rejectUnauthorized: false});
 
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const LIVE_JOB_IDLE_MS = 45 * 1000;
@@ -93,29 +91,35 @@ function sanitizeHeaders(headers) {
     return clean;
 }
 
-function fetchUpstream(targetUrl, headers, {method = 'GET', redirects = 0, timeoutMs = 30000} = {}) {
+async function fetchUpstream(targetUrl, headers, {method = 'GET', redirects = 0, timeoutMs = 30000} = {}) {
+    let parsed;
+    try {
+        parsed = new URL(targetUrl);
+    } catch (_) {
+        throw new Error('URL invalide');
+    }
+    if (!/^https?:$/.test(parsed.protocol)) {
+        throw new Error(`Protocole non supporté: ${parsed.protocol}`);
+    }
+    const isHttps = parsed.protocol === 'https:';
+    const transport = isHttps ? https : http;
+    // Même proxy que le portail (sinon : portail OK mais flux en ETIMEDOUT sur un réseau filtré)
+    const {agent, proxy} = await agentFor(targetUrl);
+
     return new Promise((resolve, reject) => {
-        let parsed;
-        try {
-            parsed = new URL(targetUrl);
-        } catch (_) {
-            reject(new Error('URL invalide'));
-            return;
-        }
-        if (!/^https?:$/.test(parsed.protocol)) {
-            reject(new Error(`Protocole non supporté: ${parsed.protocol}`));
-            return;
-        }
-        const isHttps = parsed.protocol === 'https:';
-        const transport = isHttps ? https : http;
+        const fail = (err) => {
+            err.proxy = proxy;
+            reject(err);
+        };
 
         let remoteReq;
         try {
             remoteReq = transport.request(parsed, {
                 method,
                 headers,
-                agent: isHttps ? httpsAgent : httpAgent,
+                agent,
                 timeout: timeoutMs,
+                ...(isHttps ? {rejectUnauthorized: false} : {}),
             }, (remoteRes) => {
                 if ([301, 302, 303, 307, 308].includes(remoteRes.statusCode) && remoteRes.headers.location) {
                     remoteRes.resume();
@@ -130,12 +134,12 @@ function fetchUpstream(targetUrl, headers, {method = 'GET', redirects = 0, timeo
                 resolve({remoteRes, remoteReq, finalUrl: targetUrl});
             });
         } catch (err) {
-            reject(err);
+            fail(err);
             return;
         }
 
-        remoteReq.on('error', reject);
-        remoteReq.on('timeout', () => remoteReq.destroy(new Error('Délai dépassé')));
+        remoteReq.on('error', fail);
+        remoteReq.on('timeout', () => remoteReq.destroy(Object.assign(new Error('Délai dépassé'), {code: 'ETIMEDOUT'})));
         remoteReq.end();
     });
 }
@@ -615,8 +619,9 @@ class PlaybackManager {
         try {
             upstream = await fetchUpstream(targetUrl, this.buildUpstreamHeaders(session, req, forFfmpeg));
         } catch (err) {
-            console.error('❌ Proxy error:', err.message);
-            sendText(res, 502, `Proxy error: ${err.message}`);
+            const message = describeNetworkError(err, err.proxy);
+            console.error('❌ Proxy error:', message);
+            sendText(res, 502, `Proxy error: ${message}`);
             return;
         }
 

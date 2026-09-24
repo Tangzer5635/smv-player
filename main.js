@@ -1,4 +1,4 @@
-const {app, BrowserWindow, ipcMain, dialog, shell, Tray, Menu, nativeImage, clipboard} = require('electron');
+const {app, BrowserWindow, ipcMain, dialog, shell, Tray, Menu, nativeImage, clipboard, session} = require('electron');
 const path = require('path');
 const fs = require('fs');
 const {spawn} = require('child_process');
@@ -165,6 +165,8 @@ app.whenReady().then(async () => {
         smv = createSmvServer({
             dataDir: app.getPath('userData'),
             appVersion: app.getVersion(),
+            // Proxy système Windows / macOS (y compris PAC) pour le portail et les flux
+            systemProxyResolver: (url) => session.defaultSession.resolveProxy(url),
         });
         await smv.listen();
     } catch (err) {
