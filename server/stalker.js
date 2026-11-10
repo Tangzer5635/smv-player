@@ -23,6 +23,34 @@ function buildCookie(mac) {
     return `mac=${encodeURIComponent(mac)}; stb_lang=en; timezone=Europe%2FParis`;
 }
 
+// En-têtes STB par défaut (session reconstituée quand aucune n'a été mémorisée)
+function defaultSession({portalUrl, mac, userAgent}) {
+    const serverBase = normalizeServerBase(portalUrl);
+    return {
+        serverBase,
+        mac,
+        token: '',
+        stalkerHeaders: JSON.stringify({
+            'User-Agent': userAgent,
+            'Cookie': buildCookie(mac),
+            'X-User-Agent': 'Model: MAG250; Link: WiFi',
+            'Referrer': `${serverBase}/`,
+        }),
+    };
+}
+
+// Logos / affiches parfois relatifs au portail
+function absoluteImage(value, serverBase) {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    if (/^https?:\/\//i.test(raw)) return raw;
+    try {
+        return new URL(raw, new URL(serverBase).origin + '/').toString();
+    } catch (_) {
+        return '';
+    }
+}
+
 /**
  * Charge toutes les pages d'une liste Stalker (itv, vod, series).
  * Retourne un tableau d'items bruts.
@@ -129,7 +157,7 @@ async function openSession({serverBase, mac, stalkerHeaders, token, userAgent, t
 }
 
 // ── Stalker Connect ───────────────────────────────────────────────────────────
-async function connect({portalUrl, mac, userAgent, timeoutMs}, onProgress = () => {}) {
+async function connect({portalUrl, mac, userAgent, timeoutMs, frenchOnly = true}, onProgress = () => {}) {
     const serverBase = normalizeServerBase(portalUrl);
     const stalkerHeaders = {
         'User-Agent': userAgent,
@@ -173,7 +201,7 @@ async function connect({portalUrl, mac, userAgent, timeoutMs}, onProgress = () =
         const allGenres = Array.isArray(genRes.data?.js) ? genRes.data.js : [];
         console.log(`Total genres ITV: ${allGenres.length}`);
 
-        itvGenres = filterFRGenres(allGenres);
+        itvGenres = frenchOnly ? filterFRGenres(allGenres) : allGenres;
         console.log(`Genres ITV FR filtrés: ${itvGenres.length} / ${allGenres.length}`);
         allGenres.forEach((g) => {
             itvGenreMap[g.id] = g.title;
@@ -191,7 +219,7 @@ async function connect({portalUrl, mac, userAgent, timeoutMs}, onProgress = () =
             name: item.name || 'Sans nom',
             number: parseInt(item.number) || channels.length + 1,
             cmd: item.cmd || '',
-            logo: item.logo || '',
+            logo: absoluteImage(item.logo, serverBase),
             group: itvGenreMap[item.tv_genre_id] || fallbackGroup || 'Autres',
         });
     };
@@ -219,7 +247,7 @@ async function connect({portalUrl, mac, userAgent, timeoutMs}, onProgress = () =
         const allVodGenres = Array.isArray(vodGenRes.data?.js) ? vodGenRes.data.js : [];
         console.log(`Total catégories VOD: ${allVodGenres.length}`);
 
-        const vodCategories = filterFrenchCategories(allVodGenres);
+        const vodCategories = frenchOnly ? filterFrenchCategories(allVodGenres) : allVodGenres;
         console.log(`Catégories VOD FR: ${vodCategories.length} / ${allVodGenres.length}`);
 
         for (const cat of vodCategories) {
@@ -230,7 +258,7 @@ async function connect({portalUrl, mac, userAgent, timeoutMs}, onProgress = () =
                     id: item.id || Math.random().toString(36).slice(2),
                     name: item.name || item.title || 'Sans titre',
                     cmd: item.cmd || '',
-                    logo: item.screenshot_uri || item.logo || '',
+                    logo: absoluteImage(item.screenshot_uri || item.logo, serverBase),
                     category: catName,
                     description: item.description || '',
                     year: item.year || '',
@@ -252,7 +280,7 @@ async function connect({portalUrl, mac, userAgent, timeoutMs}, onProgress = () =
         const allSrsGenres = Array.isArray(srsGenRes.data?.js) ? srsGenRes.data.js : [];
         console.log(`Total catégories Séries: ${allSrsGenres.length}`);
 
-        const srsCategories = filterFrenchCategories(allSrsGenres);
+        const srsCategories = frenchOnly ? filterFrenchCategories(allSrsGenres) : allSrsGenres;
         console.log(`Catégories Séries FR: ${srsCategories.length} / ${allSrsGenres.length}`);
 
         for (const cat of srsCategories) {
@@ -263,7 +291,7 @@ async function connect({portalUrl, mac, userAgent, timeoutMs}, onProgress = () =
                     id: item.id || Math.random().toString(36).slice(2),
                     name: item.name || item.title || 'Sans titre',
                     cmd: item.cmd || '',
-                    logo: item.screenshot_uri || item.logo || '',
+                    logo: absoluteImage(item.screenshot_uri || item.logo, serverBase),
                     category: catName,
                     description: item.description || '',
                     year: item.year || '',
@@ -417,18 +445,101 @@ async function seriesEpisodes({serverBase, mac, token, seriesId, stalkerHeadersJ
         page++;
     }
 
-    const normalizedItems = items.map((item, index) => ({
-        ...item,
-        cmd: item.cmd || item.play_cmd || item.movie_cmd || item.path || '',
-        episode_id: item.episode_id || item.id || item.video_id || item.movie_id || null,
-        container_extension: item.container_extension || item.extension || item.ext || 'mkv',
-        season_number: item.season_number || item.season_num || item.season || item.season_id || null,
-        episode_number: item.episode_number || item.episode_num || item.series_number || item.series || item.number || index + 1,
-        series_number: item.series_number || item.series || item.episode_number || item.number || index + 1,
-        title: item.title || item.name || item.episode_name || `Episode ${index + 1}`,
-    }));
-
-    return {success: true, items: normalizedItems, token: freshToken};
+    return {success: true, episodes: normalizeEpisodes(items, {seriesId, serverBase}), token: freshToken};
 }
 
-module.exports = {connect, getStream, seriesEpisodes};
+// ── Normalisation des épisodes ───────────────────────────────────────────────
+function toIntOrNull(value) {
+    if (Array.isArray(value)) return null;
+    const n = Number.parseInt(value, 10);
+    return Number.isFinite(n) ? n : null;
+}
+
+function firstInt(item, fields) {
+    for (const field of fields) {
+        const n = toIntOrNull(item[field]);
+        if (n !== null) return n;
+    }
+    return null;
+}
+
+const SEASON_FIELDS = ['season_num', 'season_number', 'season', 'season_id'];
+const EPISODE_FIELDS = ['episode_num', 'episode_number', 'series_number', 'series', 'number', 'sort_num'];
+const INDEX_FIELDS = ['series_number', 'series', 'episode_number', 'number'];
+
+/**
+ * Les portails renvoient soit un élément par épisode, soit (Ministra) un élément
+ * par saison avec la liste des numéros d'épisodes dans « series » : ce dernier
+ * cas est déplié en épisodes (create_link avec series=<numéro>).
+ */
+function normalizeEpisodes(items, {seriesId, serverBase}) {
+    const episodes = [];
+    items.forEach((item, index) => {
+        const cmd = item.cmd || item.play_cmd || item.movie_cmd || item.path || '';
+        const logo = absoluteImage(item.screenshot_uri || item.logo, serverBase);
+        const containerExtension = item.container_extension || item.extension || item.ext || 'mkv';
+        const title = item.name || item.title || item.episode_name || '';
+
+        if (Array.isArray(item.series) && item.series.length) {
+            const seasonFromName = /(?:season|saison|s)\s*(\d+)/i.exec(title)?.[1];
+            const season = firstInt(item, SEASON_FIELDS) ?? toIntOrNull(seasonFromName) ?? index + 1;
+            item.series.forEach((num) => {
+                const episode = toIntOrNull(num);
+                if (episode === null) return;
+                episodes.push({
+                    id: `${item.id || seriesId}-${episode}`,
+                    title: `Épisode ${episode}`,
+                    season,
+                    episode,
+                    seriesIndex: episode,
+                    episodeId: null,
+                    containerExtension,
+                    logo,
+                    cmd,
+                });
+            });
+            return;
+        }
+
+        const episode = firstInt(item, EPISODE_FIELDS) ?? index + 1;
+        episodes.push({
+            id: String(item.id || `${seriesId}-${index}`),
+            title: title || `Épisode ${episode}`,
+            season: firstInt(item, SEASON_FIELDS),
+            episode,
+            seriesIndex: firstInt(item, INDEX_FIELDS) ?? index + 1,
+            episodeId: item.episode_id || item.id || item.video_id || item.movie_id || null,
+            containerExtension,
+            logo,
+            cmd,
+        });
+    });
+    return episodes;
+}
+
+// ── Guide des programmes (maintenant / ensuite) ─────────────────────────────
+async function shortEpg({serverBase, mac, token, stalkerHeadersJson, userAgent, channelId, size = 4}) {
+    const {axiosInst, baseHeaders} = await openSession({
+        serverBase,
+        mac,
+        token,
+        userAgent,
+        stalkerHeaders: JSON.parse(stalkerHeadersJson || '{}'),
+        timeoutMs: 15000,
+    });
+    const res = await axiosInst.get(
+        `${serverBase}/portal.php?type=itv&action=get_short_epg&ch_id=${encodeURIComponent(channelId)}&size=${size}&JsHttpRequest=1-xml`,
+        {headers: baseHeaders}
+    );
+    const list = Array.isArray(res.data?.js) ? res.data.js : [];
+    return list
+        .map((p) => ({
+            title: String(p.name || p.title || '').trim(),
+            description: String(p.descr || p.description || '').trim(),
+            start: Number(p.start_timestamp) * 1000 || Date.parse(p.time) || 0,
+            stop: Number(p.stop_timestamp) * 1000 || Date.parse(p.time_to) || 0,
+        }))
+        .filter((p) => p.title && p.start && p.stop > p.start);
+}
+
+module.exports = {connect, getStream, seriesEpisodes, shortEpg, defaultSession, normalizeServerBase, normalizeEpisodes};

@@ -1,0 +1,24 @@
+# SMV Player — reverse proxy HTTPS
+#
+# Certificat Let's Encrypt obtenu et renouvelé automatiquement pour le domaine
+# (ports 80 et 443 redirigés vers cette machine). Pour « localhost » ou une
+# adresse IP locale, Caddy utilise sa propre autorité de certification.
+# Plusieurs adresses possibles : DOMAIN=tv.exemple.fr, 192.168.1.20
+
+{$SMV_DOMAIN:localhost} {
+	reverse_proxy smv:9191 {
+		# Vidéo en direct : transmise sans mise en tampon
+		flush_interval -1
+	}
+
+	header -Server
+
+	# Une fois l'accès HTTPS validé sur votre domaine, vous pouvez activer HSTS :
+	# header Strict-Transport-Security "max-age=31536000"
+
+	log {
+		output stderr
+		format console
+		level WARN
+	}
+}

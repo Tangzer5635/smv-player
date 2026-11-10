@@ -1,0 +1,64 @@
+# SMV Player — déploiement Docker (PC portable, Raspberry Pi, serveur)
+#
+#   cp .env.example .env      # puis renseignez DOMAIN (et le mot de passe admin)
+#   docker compose up -d --build
+#
+# Caddy obtient et renouvelle automatiquement le certificat HTTPS (Let's Encrypt)
+# pour DOMAIN. Avec DOMAIN=localhost, un certificat local est utilisé.
+
+services:
+  smv:
+    build: .
+    image: smv-player:latest
+    container_name: smv-player
+    restart: unless-stopped
+    environment:
+      SMV_TRUST_PROXY: "1"
+      SMV_PUBLIC_URL: "https://${DOMAIN:-localhost}"
+      SMV_ADMIN_USER: "${SMV_ADMIN_USER:-admin}"
+      SMV_ADMIN_PASSWORD: "${SMV_ADMIN_PASSWORD:-}"
+      SMV_MAX_TRANSCODES: "${SMV_MAX_TRANSCODES:-2}"
+      SMV_H264_ENCODER: "${SMV_H264_ENCODER:-}"
+      SMV_X264_PRESET: "${SMV_X264_PRESET:-}"
+      TZ: "${TZ:-Europe/Paris}"
+    volumes:
+      - ./data:/data
+    # Accès direct depuis la machine elle-même (sans HTTPS) : http://localhost:9191
+    ports:
+      - "127.0.0.1:9191:9191"
+    # Raspberry Pi 4 : encodeur matériel H.264 (voir README)
+    # devices:
+    #   - /dev/video11:/dev/video11
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: smv-caddy
+    restart: unless-stopped
+    depends_on:
+      - smv
+    environment:
+      SMV_DOMAIN: "${DOMAIN:-localhost}"
+    # Ports 80 et 443 indispensables pour l'accès Internet (certificat Let's Encrypt)
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+      - "${HTTPS_PORT:-443}:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+  # Nom de domaine gratuit et IP dynamique : docker compose --profile duckdns up -d
+  duckdns:
+    image: lscr.io/linuxserver/duckdns:latest
+    container_name: smv-duckdns
+    restart: unless-stopped
+    profiles: ["duckdns"]
+    environment:
+      SUBDOMAINS: "${DUCKDNS_SUBDOMAINS:-}"
+      TOKEN: "${DUCKDNS_TOKEN:-}"
+      TZ: "${TZ:-Europe/Paris}"
+
+volumes:
+  caddy_data:
+  caddy_config:

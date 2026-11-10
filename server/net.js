@@ -14,7 +14,8 @@ const {HttpsProxyAgent} = require('https-proxy-agent');
  * Proxy retenu, par ordre de priorité :
  *   1. celui saisi dans Paramètres › Réseau IPTV
  *   2. variables d'environnement HTTP_PROXY / HTTPS_PROXY / ALL_PROXY (+ NO_PROXY)
- *   3. proxy système de Windows / macOS (résolu par Electron, fichiers PAC compris)
+ *   3. résolveur de proxy système optionnel (setSystemProxyResolver), non utilisé
+ *      par le serveur : dans Docker, renseignez le proxy dans les paramètres.
  */
 
 const directHttpAgent = new http.Agent({keepAlive: true, maxSockets: 64});
@@ -43,7 +44,7 @@ function setConfiguredProxy(value) {
     }
 }
 
-// Electron : (url) => Promise<'PROXY host:port; DIRECT' | 'DIRECT'>
+// resolver : (url) => Promise<'PROXY host:port; DIRECT' | 'DIRECT'> (format PAC)
 function setSystemProxyResolver(resolver) {
     systemProxyResolver = resolver;
     systemProxyCache.clear();

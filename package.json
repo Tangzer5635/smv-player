@@ -1,76 +1,17 @@
 {
   "name": "smv-player",
-  "version": "3.0.0",
-  "description": "SMV Player — lecteur IPTV (Stalker / M3U) avec serveur intégré, utilisable sur iPhone",
-  "main": "main.js",
+  "version": "4.0.0",
+  "description": "SMV Player — lecteur IPTV (Stalker / M3U) auto-hébergé : serveur Node + interface web, HTTPS, Docker, Raspberry Pi",
+  "main": "server/index.js",
+  "private": true,
   "scripts": {
-    "start": "electron .",
-    "server": "node server/cli.js",
-    "build": "electron-builder",
-    "build:win": "electron-builder --win",
-    "build:mac": "electron-builder --mac",
-    "build:linux": "electron-builder --linux"
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "test": "node --test \"test/*.test.js\"",
+    "reset-password": "node server/admin.js reset-password"
   },
-  "build": {
-    "appId": "com.smv.player",
-    "productName": "SMV Player",
-    "icon": "assets/icon.png",
-    "directories": {
-      "output": "dist"
-    },
-    "files": [
-      "main.js",
-      "preload.js",
-      "package.json",
-      "server/**/*",
-      "renderer/**/*",
-      "node_modules/**/*",
-      "assets/**/*"
-    ],
-    "win": {
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        }
-      ],
-      "icon": "assets/icon.ico",
-      "requestedExecutionLevel": "asInvoker"
-    },
-    "mac": {
-      "target": [
-        "dmg"
-      ],
-      "icon": "assets/icon.png",
-      "category": "public.app-category.video"
-    },
-    "linux": {
-      "target": [
-        "AppImage"
-      ],
-      "icon": "assets/icon.png",
-      "category": "AudioVideo"
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "shortcutName": "SMV Player",
-      "installerIcon": "assets/icon.ico",
-      "uninstallerIcon": "assets/icon.ico",
-      "installerHeaderIcon": "assets/icon.ico",
-      "deleteAppDataOnUninstall": false
-    },
-    "asarUnpack": [
-      "node_modules/ffmpeg-static/**"
-    ]
-  },
-  "devDependencies": {
-    "electron": "^42.3.0",
-    "electron-builder": "^26.15.3"
+  "engines": {
+    "node": ">=20"
   },
   "dependencies": {
     "axios": "^1.16.1",

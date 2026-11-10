@@ -1,0 +1,15 @@
+.git
+.gitattributes
+.gitignore
+.env
+node_modules
+data
+test
+dist
+assets
+*.md
+*.pdf
+allfiles.txt
+install.sh
+docker-compose.yml
+Caddyfile

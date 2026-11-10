@@ -33,11 +33,15 @@ function readJsonFile(filePath, fallback) {
     return fallback;
 }
 
-// Écriture atomique : fichier temporaire puis rename (évite un JSON tronqué en cas de crash)
+// Écriture atomique : fichier temporaire puis rename (évite un JSON tronqué en cas de crash).
+// Lisible par le seul propriétaire : comptes, identifiants IPTV.
 function writeJsonFileSync(filePath, data) {
     const tmp = `${filePath}.tmp`;
-    fs.mkdirSync(path.dirname(filePath), {recursive: true});
-    fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf-8');
+    fs.mkdirSync(path.dirname(filePath), {recursive: true, mode: 0o700});
+    fs.writeFileSync(tmp, JSON.stringify(data, null, 2), {encoding: 'utf-8', mode: 0o600});
+    try {
+        fs.chmodSync(tmp, 0o600);
+    } catch { /* système de fichiers sans permissions (partage Windows) */ }
     fs.renameSync(tmp, filePath);
 }
 

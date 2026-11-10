@@ -22,7 +22,20 @@ const {agentFor, describeNetworkError, maskProxy} = require('./net');
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const LIVE_JOB_IDLE_MS = 45 * 1000;
 const VOD_JOB_IDLE_MS = 30 * 60 * 1000;
-const MAX_HLS_JOBS = 4;
+const MAX_HLS_JOBS = Math.max(1, Number.parseInt(process.env.SMV_MAX_TRANSCODES, 10) || 3);
+
+// Qualités réduites pour regarder à distance (débit montant limité, 4G…)
+const QUALITY_PROFILES = {
+    '1080p': {height: 1080, maxrate: '5000k', bufsize: '10000k', audio: '160k'},
+    '720p': {height: 720, maxrate: '2500k', bufsize: '5000k', audio: '128k'},
+    '480p': {height: 480, maxrate: '1200k', bufsize: '2400k', audio: '96k'},
+    '360p': {height: 360, maxrate: '700k', bufsize: '1400k', audio: '96k'},
+};
+const QUALITIES = ['source', ...Object.keys(QUALITY_PROFILES)];
+
+// Encodeur H.264 : x264 logiciel par défaut ; preset plus léger sur ARM (Raspberry Pi)
+const H264_ENCODER = process.env.SMV_H264_ENCODER || 'libx264';
+const X264_PRESET = process.env.SMV_X264_PRESET || (/^arm/.test(process.arch) ? 'ultrafast' : 'veryfast');
 const HLS_READY_TIMEOUT_MS = 45 * 1000;
 const MAX_PLAYLIST_BYTES = 8 * 1024 * 1024;
 const TS_PACKET = 188;
@@ -300,13 +313,16 @@ class TsTableFilter extends Transform {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 class HlsJob {
-    constructor({session, ffmpegPath, dir, input, videoMode, isLive}) {
+    constructor({session, ffmpegPath, dir, input, videoMode, isLive, quality}) {
         this.session = session;
         this.ffmpegPath = ffmpegPath;
         this.dir = dir;
         this.input = input;
         this.isLive = isLive;
-        this.videoMode = videoMode === 'h264' ? 'h264' : 'copy';
+        this.profile = QUALITY_PROFILES[quality] || null;
+        // Qualité réduite : réencodage obligatoire ; sinon copie (sauf codec incompatible)
+        this.videoMode = this.profile || videoMode === 'h264' ? 'h264' : 'copy';
+        this.startedAt = Date.now();
         this.segmentType = 'mpegts';
         this.hevcTag = false;
         this.restarts = 0;
@@ -340,12 +356,20 @@ class HlsJob {
             '-map', '0:v:0?', '-map', '0:a:0?', '-sn', '-dn',
         ];
 
+        const profile = this.profile;
         if (this.videoMode === 'h264') {
+            const maxrate = profile ? profile.maxrate : '8000k';
+            const bufsize = profile ? profile.bufsize : '16000k';
+            if (H264_ENCODER === 'libx264') {
+                args.push('-c:v', 'libx264', '-preset', X264_PRESET, '-crf', profile ? '24' : '23',
+                    '-maxrate', maxrate, '-bufsize', bufsize, '-profile:v', 'high', '-level', '4.1');
+            } else {
+                // Encodeur matériel (ex. h264_v4l2m2m sur Raspberry Pi 4) : débit fixe
+                args.push('-c:v', H264_ENCODER, '-b:v', maxrate);
+            }
             args.push(
-                '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23',
-                '-maxrate', '8M', '-bufsize', '16M',
-                '-vf', 'scale=\'min(1920,iw)\':-2',
-                '-pix_fmt', 'yuv420p', '-profile:v', 'high', '-level', '4.1',
+                '-vf', profile ? `scale=-2:'min(${profile.height},ih)'` : 'scale=\'min(1920,iw)\':-2',
+                '-pix_fmt', 'yuv420p',
                 '-force_key_frames', 'expr:gte(t,n_forced*2)',
             );
         } else {
@@ -353,7 +377,7 @@ class HlsJob {
             if (this.hevcTag) args.push('-tag:v', 'hvc1');
         }
 
-        args.push('-c:a', 'aac', '-b:a', '160k', '-ac', '2');
+        args.push('-c:a', 'aac', '-b:a', profile ? profile.audio : '160k', '-ac', '2');
 
         args.push('-f', 'hls', '-hls_time', this.isLive ? '2' : '4');
         if (this.isLive) {
@@ -539,7 +563,11 @@ class PlaybackManager {
         }
     }
 
-    create({url, headers, contentType}) {
+    /**
+     * meta : informations d'affichage (titre, source, appareil) pour la liste
+     * des lectures en cours dans les réglages.
+     */
+    create({url, headers, contentType, quality, meta = {}}) {
         if (!/^https?:\/\//i.test(String(url || ''))) {
             throw new Error('URL de flux invalide');
         }
@@ -550,6 +578,9 @@ class PlaybackManager {
             headers: headers && typeof headers === 'object' ? headers : {},
             contentType: contentType || 'live',
             kind: guessKind(url, contentType),
+            quality: QUALITIES.includes(quality) ? quality : 'source',
+            meta,
+            bytes: 0,
             createdAt: Date.now(),
             lastAccess: Date.now(),
             hls: null,
@@ -563,10 +594,34 @@ class PlaybackManager {
         return {
             id: session.id,
             kind: session.kind,
+            quality: session.quality,
+            // Qualité réduite : seul le flux HLS transcodé convient
+            transcodeRequired: session.quality !== 'source',
             streamUrl: `/s/${session.id}/stream`,
             hlsUrl: ffmpeg ? `/s/${session.id}/hls/index.m3u8` : null,
             ffmpeg,
         };
+    }
+
+    // Lectures en cours (réglages › système)
+    list() {
+        return [...this.sessions.values()]
+            .filter((s) => Date.now() - s.lastAccess < 2 * 60 * 1000)
+            .map((s) => ({
+                id: s.id,
+                title: s.meta.title || '',
+                source: s.meta.source || '',
+                client: s.meta.client || '',
+                device: s.meta.device || '',
+                contentType: s.contentType,
+                quality: s.quality,
+                transcoding: !!(s.hls && !s.hls.killed),
+                videoMode: s.hls && !s.hls.killed ? s.hls.videoMode : null,
+                bytes: s.bytes,
+                startedAt: s.createdAt,
+                lastAccess: s.lastAccess,
+            }))
+            .sort((a, b) => b.startedAt - a.startedAt);
     }
 
     stop(id) {
@@ -736,6 +791,9 @@ class PlaybackManager {
         if (forFfmpeg && status < 400) {
             pipeline(remoteRes, new TsTableFilter(), res, () => {});
         } else {
+            remoteRes.on('data', (chunk) => {
+                session.bytes += chunk.length;
+            });
             pipeline(remoteRes, res, () => {});
         }
     }
@@ -760,6 +818,7 @@ class PlaybackManager {
             input: `${this.getInternalBase()}/s/${session.id}/stream?ffmpeg=1`,
             videoMode: this.getConfig().hlsVideoMode,
             isLive: session.contentType === 'live',
+            quality: session.quality,
         });
         session.hls = job;
         job.start();
@@ -818,6 +877,7 @@ class PlaybackManager {
                 sendText(res, 404, 'Segment introuvable');
                 return;
             }
+            session.bytes += stat.size;
             res.writeHead(200, {
                 'Content-Type': type,
                 'Content-Length': stat.size,
@@ -872,4 +932,4 @@ class PlaybackManager {
     }
 }
 
-module.exports = {PlaybackManager, guessKind};
+module.exports = {PlaybackManager, guessKind, QUALITIES};
