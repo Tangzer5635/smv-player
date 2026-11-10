@@ -8,7 +8,7 @@ const {AuthStore, LoginLimiter} = require('../server/auth');
 const {parseM3U} = require('../server/m3u');
 const {guessKind} = require('../server/playback');
 const {maskUrl, migrateLegacyProfile, stripPlayerPrefix} = require('../server/sources');
-const {normalizeEpisodes} = require('../server/stalker');
+const {normalizeEpisodes, stripCmdPrefix, hasEmptyStreamId, extractStreamId} = require('../server/stalker');
 const net = require('../server/net');
 
 test('comptes : création, vérification, jeton, changement de mot de passe', async () => {
@@ -114,4 +114,16 @@ test('proxy : priorité paramètres > environnement, contournement local', async
     assert.deepEqual(await net.describeProxy('http://127.0.0.1:9000/'), {proxy: null, source: 'direct'});
     net.setConfiguredProxy('');
     assert.throws(() => net.normalizeProxyUrl('ftp://x'), /HTTP/);
+});
+
+test('stalker : commandes de lecture', () => {
+    assert.equal(stripCmdPrefix('ffmpeg http://a/b'), 'http://a/b');
+    assert.equal(stripCmdPrefix('ffrt2 http://a/b'), 'http://a/b');
+    assert.equal(stripCmdPrefix('http://a/b'), 'http://a/b');
+    assert.ok(hasEmptyStreamId('http://h/play/live.php?mac=x&stream=&extension=ts'));
+    assert.ok(hasEmptyStreamId('http://h/play/live.php?stream='));
+    assert.ok(!hasEmptyStreamId('http://h/play/live.php?stream=12&extension=ts'));
+    assert.equal(extractStreamId('ffmpeg http://h/play/live.php?mac=x&stream=941596&extension=ts'), '941596');
+    assert.equal(extractStreamId('ffmpeg http://localhost/ch/214864_'), '214864');
+    assert.equal(extractStreamId('/media/file_900.mkv'), '');
 });

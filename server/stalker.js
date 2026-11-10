@@ -347,15 +347,16 @@ async function getStream({
     const requestedSeriesIndex = resolvedType === 'series'
         ? Math.max(0, Number.parseInt(seriesIndex, 10) || 0)
         : 0;
-    const cmdEncoded = encodeURIComponent(cmd);
-    const createUrl = `${serverBase}/portal.php?action=create_link&type=${resolvedType}&cmd=${cmdEncoded}&series=${requestedSeriesIndex}&forced_storage=undefined&disable_ad=0&download=0&force_ch_link_check=0&JsHttpRequest=1-xml`;
-    console.log('Create link:', createUrl);
 
-    const linkRes = await axiosInst.get(createUrl, {headers: baseHeaders});
-    console.log('Réponse create_link:', JSON.stringify(linkRes.data?.js));
+    const createLink = async (type, cmdValue, series) => {
+        const createUrl = `${serverBase}/portal.php?action=create_link&type=${type}&cmd=${encodeURIComponent(cmdValue)}&series=${series}&forced_storage=undefined&disable_ad=0&download=0&force_ch_link_check=0&JsHttpRequest=1-xml`;
+        console.log('Create link:', createUrl);
+        const linkRes = await axiosInst.get(createUrl, {headers: baseHeaders});
+        console.log('Réponse create_link:', JSON.stringify(linkRes.data?.js));
+        return linkRes.data?.js;
+    };
 
-    let streamUrl = '';
-    let jsData = linkRes.data?.js;
+    let jsData = await createLink(resolvedType, cmd, requestedSeriesIndex);
 
     if (!jsData?.cmd && resolvedType === 'series') {
         const fallbackCandidates = [
@@ -367,13 +368,10 @@ async function getStream({
         ];
 
         for (const [fallbackType, fallbackSeries] of fallbackCandidates) {
-            const fallbackUrl = `${serverBase}/portal.php?action=create_link&type=${fallbackType}&cmd=${cmdEncoded}&series=${fallbackSeries}&forced_storage=undefined&disable_ad=0&download=0&force_ch_link_check=0&JsHttpRequest=1-xml`;
-            console.log('Create link fallback:', fallbackUrl);
             try {
-                const fallbackRes = await axiosInst.get(fallbackUrl, {headers: baseHeaders});
-                console.log('Réponse fallback create_link:', JSON.stringify(fallbackRes.data?.js));
-                if (fallbackRes.data?.js?.cmd) {
-                    jsData = fallbackRes.data.js;
+                const fallback = await createLink(fallbackType, cmd, fallbackSeries);
+                if (fallback?.cmd) {
+                    jsData = fallback;
                     break;
                 }
             } catch (fallbackErr) {
@@ -382,19 +380,33 @@ async function getStream({
         }
     }
 
-    if (jsData?.cmd) {
-        streamUrl = jsData.cmd;
-        if (streamUrl.startsWith('ffmpeg ') || streamUrl.startsWith('auto ')) {
-            streamUrl = streamUrl.split(' ').slice(1).join(' ');
-        }
-    }
+    let streamUrl = stripCmdPrefix(jsData?.cmd);
+    const fallbackUrls = [];
 
-    if (streamUrl.includes('stream=&') || streamUrl.includes('stream=&extension')) {
-        console.warn('⚠️ stream= vide, correction...');
-        const streamIdMatch = cmd.match(/stream[=/](\d+)/);
-        if (streamIdMatch) {
-            streamUrl = streamUrl.replace('stream=&', `stream=${streamIdMatch[1]}&`);
-            console.log('URL corrigée:', streamUrl);
+    // Lien sans identifiant de flux (« stream= » vide) : le portail n'a pas reconnu la
+    // commande, typiquement quand la liste des chaînes contient déjà l'URL complète.
+    if (hasEmptyStreamId(streamUrl)) {
+        const streamId = extractStreamId(cmd);
+        console.warn(`⚠️ Lien sans identifiant de flux (stream= vide)${streamId ? `, chaîne ${streamId}` : ''}`);
+        if (resolvedType === 'itv' && streamId) {
+            // Commande au format habituel des portails Stalker
+            try {
+                const retried = stripCmdPrefix((await createLink('itv', `ffmpeg http://localhost/ch/${streamId}_`, 0))?.cmd);
+                if (/^https?:\/\//i.test(retried) && !hasEmptyStreamId(retried)) streamUrl = retried;
+            } catch (err) {
+                console.warn('create_link (format localhost/ch) erreur:', err.message);
+            }
+        }
+        if (hasEmptyStreamId(streamUrl)) {
+            // Derniers recours, essayés dans l'ordre par le proxy : l'URL de la liste
+            // (avec son propre jeton), puis le lien du portail complété avec l'identifiant
+            const patched = streamId ? streamUrl.replace(/([?&]stream=)(?=&|$)/, `$1${streamId}`) : '';
+            const candidates = [...new Set([stripCmdPrefix(cmd), patched])]
+                .filter((u) => /^https?:\/\//i.test(u) && !hasEmptyStreamId(u));
+            if (candidates.length) {
+                streamUrl = candidates[0];
+                fallbackUrls.push(...candidates.slice(1));
+            }
         }
     }
 
@@ -406,10 +418,7 @@ async function getStream({
     }
 
     if (!streamUrl || !streamUrl.startsWith('http')) {
-        let fallbackUrl = cmd;
-        if (fallbackUrl.startsWith('ffmpeg ') || fallbackUrl.startsWith('auto ')) {
-            fallbackUrl = fallbackUrl.split(' ').slice(1).join(' ');
-        }
+        const fallbackUrl = stripCmdPrefix(cmd);
         if (fallbackUrl.startsWith('http')) {
             streamUrl = fallbackUrl;
         } else {
@@ -418,7 +427,24 @@ async function getStream({
     }
 
     console.log('Stream URL finale:', streamUrl);
-    return {success: true, url: streamUrl, headers: baseHeaders, token: freshToken};
+    if (fallbackUrls.length) console.log('Liens de secours:', fallbackUrls.join(' | '));
+    return {success: true, url: streamUrl, fallbackUrls, headers: baseHeaders, token: freshToken};
+}
+
+// « ffmpeg http://… » → « http://… »
+function stripCmdPrefix(value) {
+    const text = String(value || '').trim();
+    return /^(ffmpeg|ffrt\d*|auto)\s+/i.test(text) ? text.replace(/^\S+\s+/, '') : text;
+}
+
+function hasEmptyStreamId(url) {
+    return /[?&]stream=(?=&|$)/.test(String(url || ''));
+}
+
+function extractStreamId(cmd) {
+    const text = String(cmd || '');
+    const m = /[?&]stream=(\d+)/.exec(text) || /\/ch\/(\d+)/.exec(text);
+    return m ? m[1] : '';
 }
 
 // ── Stalker épisodes de série ────────────────────────────────────────────────
@@ -542,4 +568,4 @@ async function shortEpg({serverBase, mac, token, stalkerHeadersJson, userAgent, 
         .filter((p) => p.title && p.start && p.stop > p.start);
 }
 
-module.exports = {connect, getStream, seriesEpisodes, shortEpg, defaultSession, normalizeServerBase, normalizeEpisodes};
+module.exports = {connect, getStream, seriesEpisodes, shortEpg, defaultSession, normalizeServerBase, normalizeEpisodes, stripCmdPrefix, hasEmptyStreamId, extractStreamId};

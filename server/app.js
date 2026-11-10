@@ -300,9 +300,10 @@ function createApp({dataDir, version = '0.0.0', trustProxy = false, publicUrl = 
             console.error('Erreur de lecture:', err.message);
             throw new HttpError(502, err.message);
         }
-        const {item, url, headers} = resolved;
+        const {item, url, fallbackUrls, headers} = resolved;
         const description = playback.create({
             url,
+            fallbackUrls,
             headers,
             contentType: item.contentType === 'live' ? 'live' : 'vod',
             quality,

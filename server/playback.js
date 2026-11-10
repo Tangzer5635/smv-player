@@ -567,7 +567,7 @@ class PlaybackManager {
      * meta : informations d'affichage (titre, source, appareil) pour la liste
      * des lectures en cours dans les réglages.
      */
-    create({url, headers, contentType, quality, meta = {}}) {
+    create({url, fallbackUrls = [], headers, contentType, quality, meta = {}}) {
         if (!/^https?:\/\//i.test(String(url || ''))) {
             throw new Error('URL de flux invalide');
         }
@@ -575,6 +575,8 @@ class PlaybackManager {
             id: randomId(16),
             secret: crypto.randomBytes(16),
             url,
+            // Liens de secours essayés si le fournisseur refuse le précédent
+            fallbackUrls: (Array.isArray(fallbackUrls) ? fallbackUrls : []).filter((u) => /^https?:\/\//i.test(String(u))),
             headers: headers && typeof headers === 'object' ? headers : {},
             contentType: contentType || 'live',
             kind: guessKind(url, contentType),
@@ -725,6 +727,12 @@ class PlaybackManager {
         // Diagnostic du flux principal (pas des segments HLS) : code HTTP, type, chemin réseau
         if (targetUrl === session.url) {
             const via = proxy ? `via le proxy ${maskProxy(proxy)}` : 'connexion directe';
+            if (status >= 400 && session.fallbackUrls.length) {
+                remoteRes.destroy();
+                console.warn(`⚠️ Flux refusé : HTTP ${status} — essai du lien de secours`);
+                session.url = session.fallbackUrls.shift();
+                return this.proxy(session, req, res, session.url, {forFfmpeg});
+            }
             if (status >= 400 || /text\/html/i.test(contentType)) {
                 const detail = summarizeBody(await readBodyPrefix(remoteRes, 256 * 1024));
                 const server = remoteRes.headers.server || remoteRes.headers['x-powered-by'] || '';

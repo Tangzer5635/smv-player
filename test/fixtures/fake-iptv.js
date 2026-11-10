@@ -79,6 +79,10 @@ function startFakeIptv({mediaDir, port = 0, channels = 450} = {}) {
                     }));
                     all[1].cmd = 'ffmpeg http://localhost/ch/mpeg2';
                     all[2].cmd = 'ffmpeg http://localhost/ch/blocked';
+                    // Portails dont la liste contient déjà l'URL complète avec jeton
+                    all[3].cmd = `ffmpeg http://${host}/play/live.php?mac=00:1A:79:00:00:01&stream=103&extension=ts&play_token=LIST103`;
+                    all[4].cmd = `ffmpeg http://${host}/play/live.php?mac=00:1A:79:00:00:01&stream=104&extension=ts&play_token=LIST104`;
+                    all[5].cmd = `ffmpeg http://${host}/play/live.php?mac=00:1A:79:00:00:01&stream=105&extension=ts&play_token=STALE105`;
                     return json({total_items: all.length, data: all.slice((page - 1) * 200, page * 200)});
                 }
                 if (type === 'itv' && q.get('genre') === '2') {
@@ -102,6 +106,11 @@ function startFakeIptv({mediaDir, port = 0, channels = 450} = {}) {
             }
             if (action === 'create_link') {
                 const cmd = q.get('cmd') || '';
+                // Commande « URL complète » non reconnue : lien sans identifiant, jeton inutilisable
+                const empty = (token) => json({id: null, cmd: `ffmpeg http://${host}/play/live.php?mac=00:1A:79:00:00:01&stream=&extension=ts&play_token=${token}`});
+                if (/stream=105&|localhost\/ch\/105_/.test(cmd)) return empty('PORTAL105');
+                if (/\/play\/live\.php/.test(cmd) || /localhost\/ch\/104_/.test(cmd)) return empty('EMPTY');
+                if (/localhost\/ch\/103_/.test(cmd)) return json({id: '103', cmd: `ffmpeg http://${host}/play/live.php?mac=00:1A:79:00:00:01&stream=103&extension=ts&play_token=GOOD103`});
                 if (/mpeg2/.test(cmd)) return json({cmd: `ffmpeg http://${host}/live/mpeg2`});
                 if (/blocked/.test(cmd)) return json({cmd: `ffmpeg http://${host}/blocked`});
                 if (/\/ch\//.test(cmd)) return json({cmd: `ffmpeg http://${host}/play/live.php?stream=1&extension=ts&play_token=abc`});
@@ -114,6 +123,13 @@ function startFakeIptv({mediaDir, port = 0, channels = 450} = {}) {
 
         if (u.pathname === '/blocked') {
             res.writeHead(456, {'Content-Type': 'text/html; charset=UTF-8', Server: 'nginx/1.28.0'});
+            res.end('');
+            return;
+        }
+
+        // Jeton émis pour un lien sans identifiant de flux : refusé comme par le vrai CDN
+        if (u.pathname === '/play/live.php' && ['EMPTY', 'STALE105'].includes(u.searchParams.get('play_token'))) {
+            res.writeHead(456, {'Content-Type': 'text/html; charset=UTF-8', Server: 'CDN PROXY SERVICE'});
             res.end('');
             return;
         }

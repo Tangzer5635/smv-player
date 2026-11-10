@@ -537,7 +537,7 @@ class SourceStore {
             });
             if (!res.success) throw new Error(res.error || 'Impossible de créer le lien');
             this.rememberToken(source, res.token);
-            return {item, url: res.url, headers: res.headers || {}};
+            return {item, url: res.url, fallbackUrls: res.fallbackUrls || [], headers: res.headers || {}};
         }
 
         const url = stripPlayerPrefix(cmd);

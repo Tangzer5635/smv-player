@@ -92,6 +92,39 @@ test('SMV Player : parcours complet de l\'API', {skip: !media && 'ffmpeg absent'
         assert.equal(lib.data.history[0].key, 'live:100');
     });
 
+    await t.test('portail renvoyant un lien sans identifiant (stream= vide)', async () => {
+        const readTs = async (streamUrl) => {
+            const ctrl = new AbortController();
+            const stream = await fetch(smv.url + streamUrl, {signal: ctrl.signal});
+            assert.equal(stream.status, 200);
+            const {value} = await stream.body.getReader().read();
+            ctrl.abort();
+            return value;
+        };
+        // 1. Nouvelle demande au format « localhost/ch/<id>_ » : lien valide
+        let res = await api.post(`/api/sources/${sourceId}/play`, {key: 'live:103'});
+        assert.equal(res.status, 200, JSON.stringify(res.data));
+        assert.equal((await readTs(res.data.streamUrl))[0], 0x47);
+        let played = iptv.log.filter((l) => l.path === '/play/live.php').pop();
+        assert.match(played.query, /stream=103&.*play_token=GOOD103/);
+
+        // 2. Le portail ne sait pas faire mieux : URL de la liste (son propre jeton)
+        res = await api.post(`/api/sources/${sourceId}/play`, {key: 'live:104', previous: res.data.id});
+        assert.equal(res.status, 200, JSON.stringify(res.data));
+        assert.equal((await readTs(res.data.streamUrl))[0], 0x47);
+        played = iptv.log.filter((l) => l.path === '/play/live.php').pop();
+        assert.match(played.query, /stream=104&.*play_token=LIST104/);
+        assert.ok(!iptv.log.some((l) => /play_token=EMPTY/.test(l.query || '')), 'jeton du lien vide jamais utilisé');
+
+        // 3. URL de la liste périmée (refusée) : le proxy passe au lien du portail complété
+        res = await api.post(`/api/sources/${sourceId}/play`, {key: 'live:105', previous: res.data.id});
+        assert.equal(res.status, 200, JSON.stringify(res.data));
+        assert.equal((await readTs(res.data.streamUrl))[0], 0x47);
+        const tries = iptv.log.filter((l) => l.path === '/play/live.php' && /stream=105/.test(l.query)).map((l) => l.query);
+        assert.match(tries[0], /play_token=STALE105/);
+        assert.match(tries.at(-1), /stream=105&.*play_token=PORTAL105/);
+    });
+
     await t.test('flux refusé par le fournisseur : code HTTP conservé', async () => {
         const res = await api.post(`/api/sources/${sourceId}/play`, {key: 'live:102'});
         const stream = await fetch(smv.url + res.data.streamUrl);
