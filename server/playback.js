@@ -705,6 +705,11 @@ class PlaybackManager {
      * (le flux est lu séquentiellement).
      */
     async proxy(session, req, res, targetUrl, {forFfmpeg = false} = {}) {
+        // Lien déjà refusé par le fournisseur : inutile de le redemander (ffmpeg, relances)
+        if (targetUrl === session.url && session.refused) {
+            sendText(res, session.refused.status, session.refused.message);
+            return;
+        }
         let upstream;
         try {
             upstream = await fetchUpstream(targetUrl, this.buildUpstreamHeaders(session, req, forFfmpeg));
@@ -737,7 +742,10 @@ class PlaybackManager {
                 const detail = summarizeBody(await readBodyPrefix(remoteRes, 256 * 1024));
                 const server = remoteRes.headers.server || remoteRes.headers['x-powered-by'] || '';
                 console.warn(`⚠️ Flux refusé : HTTP ${status} ${contentType || '(sans type)'} — ${via}${server ? ` — serveur « ${server} »` : ''}${detail ? ` — « ${detail} »` : ' — page vide'}`);
-                sendText(res, status >= 400 ? status : 502, `Flux refusé (HTTP ${status})${detail ? ` : ${detail}` : ''}`);
+                const refusal = {status: status >= 400 ? status : 502, message: `Flux refusé (HTTP ${status})${detail ? ` : ${detail}` : ''}`};
+                // Refus du fournisseur (4xx) : définitif pour ce lien, une nouvelle lecture en redemande un
+                if (status >= 400 && status < 500) session.refused = refusal;
+                sendText(res, refusal.status, refusal.message);
                 return;
             }
             if (!session.loggedStart) {
@@ -839,6 +847,11 @@ class PlaybackManager {
             return;
         }
 
+        if (session.refused) {
+            sendText(res, session.refused.status, session.refused.message);
+            return;
+        }
+
         let job;
         try {
             job = await this.ensureHlsJob(session);
@@ -852,9 +865,13 @@ class PlaybackManager {
             try {
                 await job.waitReady();
             } catch (err) {
-                console.error('❌ HLS:', err.message);
                 job.kill();
                 if (session.hls === job) session.hls = null;
+                if (session.refused) {
+                    sendText(res, session.refused.status, session.refused.message);
+                    return;
+                }
+                console.error('❌ HLS:', err.message);
                 sendText(res, 502, err.message);
                 return;
             }

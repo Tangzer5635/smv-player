@@ -130,6 +130,18 @@ test('SMV Player : parcours complet de l\'API', {skip: !media && 'ffmpeg absent'
         const stream = await fetch(smv.url + res.data.streamUrl);
         assert.equal(stream.status, 456);
         assert.match(await stream.text(), /Flux refusé/);
+
+        // Le HLS (iPhone, mode compatibilité) renvoie le même refus sans relancer ffmpeg
+        const before = iptv.log.filter((l) => l.path === '/blocked').length;
+        for (let i = 0; i < 2; i++) {
+            const hls = await fetch(smv.url + res.data.hlsUrl);
+            assert.equal(hls.status, 456);
+            assert.match(await hls.text(), /Flux refusé/);
+        }
+        const again = await fetch(smv.url + res.data.streamUrl);
+        assert.equal(again.status, 456);
+        await again.text();
+        assert.equal(iptv.log.filter((l) => l.path === '/blocked').length, before, 'fournisseur non resollicité');
     });
 
     await t.test('VOD MP4 : requêtes partielles (avance rapide)', async () => {
