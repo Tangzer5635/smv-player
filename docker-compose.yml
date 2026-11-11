@@ -59,6 +59,19 @@ services:
       TOKEN: "${DUCKDNS_TOKEN:-}"
       TZ: "${TZ:-Europe/Paris}"
 
+  # Cloudflare Tunnel : accès HTTPS depuis Internet sans ouvrir de port sur la box.
+  # Cloudflare fournit le certificat ; dans le tableau de bord, faites pointer le
+  # nom public du tunnel vers « http://smv:9191 » (Caddy et les ports 80/443
+  # deviennent alors inutiles). Démarrage : docker compose --profile cloudflare up -d
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: smv-cloudflared
+    restart: unless-stopped
+    profiles: ["cloudflare"]
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: "${CLOUDFLARE_TUNNEL_TOKEN:-}"
+
 volumes:
   caddy_data:
   caddy_config:

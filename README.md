@@ -143,9 +143,34 @@ avec le cadenas HTTPS.
   publique depuis le Wi-Fi local.
 - Vérifiez que le domaine pointe vers votre IP publique : `nslookup matv.duckdns.org`.
 - Certains accès (4G/5G box, fibre avec IPv4 partagée, « CGNAT ») ne permettent pas d'ouvrir de
-  ports. Demandez une IPv4 dédiée à votre opérateur (souvent gratuite), ou installez
-  [Tailscale](https://tailscale.com) sur le Pi et vos appareils : vous accédez alors à SMV Player
-  par un réseau privé chiffré, sans ouvrir de port.
+  ports. Trois solutions, sans toucher à la box : un **Cloudflare Tunnel** (ci-dessous),
+  [Tailscale](https://tailscale.com) (réseau privé chiffré entre vos appareils), ou demander une
+  IPv4 dédiée à votre opérateur (souvent gratuite).
+
+### Accès par Cloudflare Tunnel (sans ouvrir de port)
+
+Le tunnel relie le Pi à Cloudflare, qui fournit l'adresse HTTPS publique et le certificat. Caddy et
+la redirection de ports deviennent inutiles.
+
+1. Un nom de domaine géré par Cloudflare (un domaine gratuit peut y être ajouté).
+2. Sur https://one.dash.cloudflare.com → **Networks › Tunnels › Create a tunnel** (type *Cloudflared*).
+3. Copiez le **jeton** affiché (`eyJ…`) dans `.env` : `CLOUDFLARE_TUNNEL_TOKEN=eyJ…`
+4. Dans **Public Hostnames**, ajoutez votre sous-domaine (ex. `tv.exemple.com`) et pointez-le vers
+   le service `http://smv:9191`.
+5. Démarrez le tunnel : `docker compose --profile cloudflare up -d`
+
+Mettez aussi `DOMAIN=tv.exemple.com` dans `.env` (pour l'affichage et les QR codes). Le tunnel passe
+par le réseau Docker : nul besoin des ports 80/443, vous pouvez laisser Caddy à l'arrêt. Note :
+l'offre gratuite de Cloudflare n'est pas prévue pour diffuser beaucoup de vidéo ; pour un usage
+familial ça passe, mais ce n'est pas garanti.
+
+### Raspberry Pi 3B+ (1 Go de RAM)
+
+Il convient pour regarder à **une seule personne** en qualité **Source** (le serveur ne fait que
+remultiplexer le flux, c'est léger). Il n'a pas d'encodeur H.264 exploitable : évitez les qualités
+réduites (720p, 480p…), qui réencodent en logiciel et le saturent. Mettez `SMV_MAX_TRANSCODES=1`
+dans `.env`, utilisez **Raspberry Pi OS 64 bits** et une carte SD de 16 Go ou plus. Le premier
+`--build` est long (15 à 30 min) : c'est normal.
 
 ---
 
